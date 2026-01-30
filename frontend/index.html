@@ -164,7 +164,7 @@
                 opt.value = level; opt.innerText = level;
                 filter.appendChild(opt);
             });
-            filter.value = Array.from(observedLevels).has(current) ? current : 'all';
+            filter.value = observedLevels.has(current) ? current : 'all';
         }
 
         function updateDeviceList() {
@@ -238,7 +238,7 @@
             let displayLogs = allLogs.filter(l => {
                 const matchDevice = (currentDeviceId === 'all' || l.id === currentDeviceId);
                 const matchLevel = (selectedLevel === 'all' || l.level === selectedLevel);
-                const contentStr = JSON.stringify(l.content).toLowerCase();
+                const contentStr = (JSON.stringify(l.content) || "").toLowerCase();
                 const matchSearch = !term || contentStr.includes(term);
                 return matchDevice && matchLevel && matchSearch;
             });
