@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Konvy Log Dashboard v1.4</title>
+    <title>Konvy Log Dashboard v1.7</title>
     <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
     <style>
         :root {
@@ -49,7 +49,7 @@
         .time { color: #858585; margin-right: 8px; font-weight: bold; }
         .tag { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 10px; margin-right: 6px; font-weight: bold; color: #fff; }
         
-        input { background: #3c3c3c; border: 1px solid var(--border-color); color: white; padding: 4px 8px; border-radius: 3px; outline: none; }
+        input, select { background: #3c3c3c; border: 1px solid var(--border-color); color: white; padding: 4px 8px; border-radius: 3px; outline: none; }
         button { background: #444; color: white; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; }
         button:hover { background: #555; }
     </style>
@@ -73,6 +73,9 @@
         <div class="main">
             <div class="toolbar">
                 <input type="text" id="searchInput" placeholder="搜索内容..." style="width: 180px;">
+                <select id="levelFilter" onchange="refreshDisplay()">
+                    <option value="all">所有级别 (All)</option>
+                </select>
                 <button id="sortBtn" onclick="toggleSort()">排序: 最新优先 ↓</button>
                 <div style="flex:1"></div>
                 <div id="status" style="font-size:10px; color:#666">Status: Disconnected</div>
@@ -89,6 +92,7 @@
         let currentDeviceId = 'all';
         let sortDesc = true;
         const devices = new Map();
+        const observedLevels = new Set();
         let allLogs = [];
 
         const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
@@ -109,16 +113,22 @@
         function processItem(log) {
             const dId = log.deviceId || log.device_id || 'unknown';
             const dName = log.deviceName || log.device_name || 'Unknown Device';
+            const level = (log.level || 'info').toLowerCase();
             
             if (!devices.has(dId) || log.metadata) {
                 devices.set(dId, { name: dName, metadata: log.metadata ? log.metadata : (devices.get(dId)?.metadata || {}) });
                 updateDeviceList();
             }
 
+            if (!observedLevels.has(level)) {
+                observedLevels.add(level);
+                updateLevelFilter();
+            }
+
             allLogs.push({
                 id: dId,
                 name: dName,
-                level: (log.level || 'info').toLowerCase(),
+                level: level,
                 content: log.content,
                 ts: log.timestamp ? log.timestamp * 1000 : Date.now(),
                 timeStr: formatTime(log.timestamp ? log.timestamp * 1000 : Date.now())
@@ -131,12 +141,23 @@
             return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
         }
 
+        function updateLevelFilter() {
+            const filter = document.getElementById('levelFilter');
+            const current = filter.value;
+            filter.innerHTML = '<option value="all">所有级别 (All)</option>';
+            
+            const sortedLevels = Array.from(observedLevels).sort();
+            sortedLevels.forEach(level => {
+                const opt = document.createElement('option');
+                opt.value = level;
+                opt.innerText = level.toUpperCase();
+                filter.appendChild(opt);
+            });
+            filter.value = observedLevels.has(current) ? current : 'all';
+        }
+
         function updateDeviceList() {
             const list = document.getElementById('device-list');
-            const groups = Array.from(list.querySelectorAll('.device-group'));
-            const activeGroup = groups.find(g => g.querySelector('.device-item').classList.contains('active'));
-            const expandedId = activeGroup?.id;
-
             list.innerHTML = `
                 <div class="device-group ${currentDeviceId === 'all' ? 'expanded' : ''}" id="group-all">
                     <div class="device-item ${currentDeviceId === 'all' ? 'active' : ''}" onclick="selectDevice('all')">
@@ -153,6 +174,7 @@
                 const fields = [
                     { k: 'UID', v: meta.user_id },
                     { k: 'User', v: meta.username },
+                    { k: 'Version', v: meta.appVersion },
                     { k: 'OS', v: meta.osVersion },
                     { k: 'IMEI', v: meta.imei },
                     { k: 'FCM', v: meta.fcm_token },
@@ -204,12 +226,21 @@
             const list = document.getElementById('log-list');
             list.innerHTML = '';
             const term = document.getElementById('searchInput').value.toLowerCase();
-            let displayLogs = allLogs.filter(l => (currentDeviceId === 'all' || l.id === currentDeviceId) && (!term || JSON.stringify(l.content).toLowerCase().includes(term)));
+            const selectedLevel = document.getElementById('levelFilter').value;
+
+            let displayLogs = allLogs.filter(l => {
+                const matchDevice = (currentDeviceId === 'all' || l.id === currentDeviceId);
+                const matchLevel = (selectedLevel === 'all' || l.level === selectedLevel);
+                const contentStr = typeof l.content === 'object' ? JSON.stringify(l.content) : String(l.content);
+                const matchSearch = !term || contentStr.toLowerCase().includes(term);
+                return matchDevice && matchLevel && matchSearch;
+            });
+
             displayLogs.sort((a, b) => sortDesc ? b.ts - a.ts : a.ts - b.ts);
             displayLogs.forEach(log => {
                 const div = document.createElement('div');
                 div.className = 'log-entry';
-                const colors = { error: '#f48771', warn: '#d7ba7d', info: '#6a9955' };
+                const colors = { error: '#f48771', warn: '#d7ba7d', info: '#6a9955', debug: '#b5cea8' };
                 const levelColor = colors[log.level] || colors.info;
                 div.innerHTML = `<span class="time">${log.timeStr}</span><span class="tag" style="background:${levelColor}">${log.level.toUpperCase()}</span><span style="color:#569cd6">[${log.name}]</span> <span style="color:#ce9178">${JSON.stringify(log.content, null, 2)}</span>`;
                 list.appendChild(div);
@@ -222,7 +253,12 @@
             refreshDisplay();
         }
 
-        function clearLogs() { allLogs = []; refreshDisplay(); }
+        function clearLogs() { 
+            allLogs = []; 
+            observedLevels.clear();
+            updateLevelFilter();
+            refreshDisplay(); 
+        }
         document.getElementById('searchInput').oninput = () => refreshDisplay();
         pusher.connection.bind('state_change', (s) => document.getElementById('status').innerText = 'Status: ' + s.current);
     </script>
