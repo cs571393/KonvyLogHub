@@ -1,0 +1,12 @@
+name = "konvy-log-relay"
+main = "worker/index.js"
+compatibility_date = "2024-01-30"
+node_compat = true
+
+[vars]
+# 填入 Pusher 信息
+PUSHER_APP_ID = "2108762"
+PUSHER_KEY = "562d8abb0be1266edf50"
+PUSHER_SECRET = "4079903139c7cc4d1e91"
+PUSHER_CLUSTER = "us2"
+AUTH_TOKEN = "konvy-debug-2026"

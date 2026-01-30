@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Konvy Log Dashboard</title>
+    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #1e1e1e;
+            --sidebar-bg: #252526;
+            --text-color: #d4d4d4;
+            --border-color: #333;
+            --accent-color: #007acc;
+            --log-info: #6a9955;
+            --log-warn: #d7ba7d;
+            --log-error: #f48771;
+        }
+        body, html { height: 100%; margin: 0; font-family: 'Consolas', 'Monaco', monospace; background: var(--bg-color); color: var(--text-color); overflow: hidden; }
+        .container { display: flex; height: 100vh; }
+        
+        /* Sidebar */
+        .sidebar { width: 260px; background: var(--sidebar-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar-header { padding: 15px; font-weight: bold; border-bottom: 1px solid var(--border-color); font-size: 14px; }
+        .device-list { flex: 1; overflow-y: auto; }
+        .device-item { padding: 12px 15px; cursor: pointer; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; font-size: 13px; }
+        .device-item:hover { background: #2a2d2e; }
+        .device-item.active { background: #37373d; border-left: 4px solid var(--accent-color); }
+        .device-dot { width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 10px; }
+
+        /* Main Console */
+        .main { flex: 1; display: flex; flex-direction: column; }
+        .toolbar { height: 45px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 15px; gap: 15px; }
+        .log-container { flex: 1; overflow-y: auto; padding: 10px; font-size: 12px; line-height: 1.4; }
+        
+        .log-entry { margin-bottom: 2px; padding: 2px 4px; border-bottom: 1px solid #2d2d2d; word-break: break-all; }
+        .time { color: #858585; margin-right: 8px; }
+        .tag { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 10px; margin-right: 6px; font-weight: bold; color: #fff; }
+        
+        input { background: #3c3c3c; border: 1px solid var(--border-color); color: white; padding: 4px 8px; border-radius: 3px; outline: none; }
+        button { background: #444; color: white; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+        button:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">设备列表 (Devices)</div>
+            <div id="device-list" class="device-list">
+                <div class="device-item active" onclick="filterDevice('all')">
+                    <div class="device-dot"></div><span>全部设备</span>
+                </div>
+            </div>
+            <div style="padding: 10px;"><button style="width: 100%" onclick="clearLogs()">清空面板</button></div>
+        </div>
+        <div class="main">
+            <div class="toolbar">
+                <input type="text" id="searchInput" placeholder="过滤关键字..." style="width: 200px;">
+                <div style="flex:1"></div>
+                <div id="status" style="font-size:11px; color:#666">连接中...</div>
+            </div>
+            <div id="log-container" class="log-container"><div id="log-list"></div></div>
+        </div>
+    </div>
+
+    <script>
+        // --- 请在此填入你的 Pusher Key ---
+        const PUSHER_KEY = 'YOUR_KEY'; 
+        const PUSHER_CLUSTER = 'YOUR_CLUSTER';
+
+        let currentDeviceId = 'all';
+        const devices = new Map();
+        let logs = [];
+
+        const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
+        const channel = pusher.subscribe('konvy-logs');
+
+        channel.bind('log-event', (data) => {
+            const log = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!devices.has(log.deviceId)) {
+                devices.set(log.deviceId, log.deviceName);
+                updateDeviceList();
+            }
+            log.time = new Date().toLocaleTimeString();
+            logs.push(log);
+            if (logs.length > 2000) logs.shift();
+            renderLog(log);
+        });
+
+        pusher.connection.bind('state_change', (states) => {
+            document.getElementById('status').innerText = 'Status: ' + states.current;
+        });
+
+        function renderLog(log) {
+            if (currentDeviceId !== 'all' && log.deviceId !== currentDeviceId) return;
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            const contentStr = JSON.stringify(log.content);
+            if (term && !contentStr.toLowerCase().includes(term)) return;
+
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const color = log.level === 'error' ? '#f48771' : (log.level === 'warn' ? '#d7ba7d' : '#6a9955');
+            div.innerHTML = `<span class="time">${log.time}</span><span class="tag" style="background:${color}">${log.level || 'INFO'}</span><span style="color:#569cd6">[${log.deviceName}]</span> <span style="color:#ce9178">${contentStr}</span>`;
+            
+            const list = document.getElementById('log-list');
+            list.appendChild(div);
+            const container = document.getElementById('log-container');
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updateDeviceList() {
+            const list = document.getElementById('device-list');
+            list.innerHTML = `<div class="device-item ${currentDeviceId === 'all' ? 'active' : ''}" onclick="filterDevice('all')"><div class="device-dot"></div><span>全部设备</span></div>`;
+            devices.forEach((name, id) => {
+                const div = document.createElement('div');
+                div.className = `device-item ${currentDeviceId === id ? 'active' : ''}`;
+                div.onclick = () => filterDevice(id);
+                div.innerHTML = `<div class="device-dot" style="background:#2196f3"></div><span>${name}</span>`;
+                list.appendChild(div);
+            });
+        }
+
+        function filterDevice(id) {
+            currentDeviceId = id;
+            updateDeviceList();
+            document.getElementById('log-list').innerHTML = '';
+            logs.forEach(renderLog);
+        }
+
+        function clearLogs() {
+            logs = [];
+            document.getElementById('log-list').innerHTML = '';
+        }
+        
+        document.getElementById('searchInput').oninput = () => {
+            document.getElementById('log-list').innerHTML = '';
+            logs.forEach(renderLog);
+        };
+    </script>
+</body>
+</html>
