@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Konvy Log Dashboard</title>
+    <title>Konvy Log Dashboard v1.4</title>
     <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
     <style>
         :root {
@@ -20,25 +20,37 @@
         .container { display: flex; height: 100vh; }
         
         /* Sidebar */
-        .sidebar { width: 260px; background: var(--sidebar-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
+        .sidebar { width: 320px; background: var(--sidebar-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; }
         .sidebar-header { padding: 15px; font-weight: bold; border-bottom: 1px solid var(--border-color); font-size: 14px; }
         .device-list { flex: 1; overflow-y: auto; }
-        .device-item { padding: 12px 15px; cursor: pointer; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; font-size: 13px; }
+        
+        .device-group { border-bottom: 1px solid var(--border-color); }
+        .device-item { padding: 12px 15px; cursor: pointer; display: flex; align-items: center; justify-content: space-between; font-size: 13px; transition: background 0.2s; }
         .device-item:hover { background: #2a2d2e; }
         .device-item.active { background: #37373d; border-left: 4px solid var(--accent-color); }
-        .device-dot { width: 8px; height: 8px; background: #4caf50; border-radius: 50%; margin-right: 10px; }
+        
+        .chevron { width: 12px; height: 12px; transition: transform 0.3s; fill: #858585; }
+        .device-group.expanded .chevron { transform: rotate(90deg); }
+        
+        /* Device Details Area */
+        .device-details { display: none; background: #1a1a1b; padding: 10px 15px; font-size: 11px; border-top: 1px solid #333; }
+        .device-group.expanded .device-details { display: block; }
+        .info-row { display: flex; padding: 4px 0; border-bottom: 1px solid #252526; }
+        .info-key { width: 85px; color: #858585; flex-shrink: 0; }
+        .info-val { color: #ce9178; word-break: break-all; flex: 1; }
+        .copy-btn { color: var(--accent-color); cursor: pointer; margin-left: 5px; font-size: 10px; }
+        .copy-btn:hover { text-decoration: underline; }
 
         /* Main Console */
         .main { flex: 1; display: flex; flex-direction: column; }
-        .toolbar { height: 45px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 15px; gap: 15px; }
+        .toolbar { height: 45px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 15px; gap: 10px; }
         .log-container { flex: 1; overflow-y: auto; padding: 10px; font-size: 12px; line-height: 1.4; }
-        
-        .log-entry { margin-bottom: 2px; padding: 2px 4px; border-bottom: 1px solid #2d2d2d; word-break: break-all; }
-        .time { color: #858585; margin-right: 8px; }
+        .log-entry { margin-bottom: 2px; padding: 4px; border-bottom: 1px solid #2d2d2d; word-break: break-all; }
+        .time { color: #858585; margin-right: 8px; font-weight: bold; }
         .tag { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 10px; margin-right: 6px; font-weight: bold; color: #fff; }
         
         input { background: #3c3c3c; border: 1px solid var(--border-color); color: white; padding: 4px 8px; border-radius: 3px; outline: none; }
-        button { background: #444; color: white; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; }
+        button { background: #444; color: white; border: none; padding: 5px 12px; border-radius: 3px; cursor: pointer; font-size: 11px; }
         button:hover { background: #555; }
     </style>
 </head>
@@ -47,17 +59,23 @@
         <div class="sidebar">
             <div class="sidebar-header">设备列表 (Devices)</div>
             <div id="device-list" class="device-list">
-                <div class="device-item active" onclick="filterDevice('all')">
-                    <div class="device-dot"></div><span>全部设备</span>
+                <div class="device-group" id="group-all">
+                    <div class="device-item active" onclick="selectDevice('all')">
+                        <div style="display:flex; align-items:center">
+                            <div style="width:8px;height:8px;background:#4caf50;border-radius:50%;margin-right:10px"></div>
+                            <span>全部设备</span>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div style="padding: 10px;"><button style="width: 100%" onclick="clearLogs()">清空面板</button></div>
         </div>
         <div class="main">
             <div class="toolbar">
-                <input type="text" id="searchInput" placeholder="过滤关键字..." style="width: 200px;">
+                <input type="text" id="searchInput" placeholder="搜索内容..." style="width: 180px;">
+                <button id="sortBtn" onclick="toggleSort()">排序: 最新优先 ↓</button>
                 <div style="flex:1"></div>
-                <div id="status" style="font-size:11px; color:#666">连接中...</div>
+                <div id="status" style="font-size:10px; color:#666">Status: Disconnected</div>
             </div>
             <div id="log-container" class="log-container"><div id="log-list"></div></div>
         </div>
@@ -69,73 +87,144 @@
         const PUSHER_CLUSTER = 'us2';
 
         let currentDeviceId = 'all';
+        let sortDesc = true;
         const devices = new Map();
-        let logs = [];
+        let allLogs = [];
 
         const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
         const channel = pusher.subscribe('konvy-logs');
 
         channel.bind('log-event', (data) => {
-            const log = typeof data === 'string' ? JSON.parse(data) : data;
-            if (!devices.has(log.deviceId)) {
-                devices.set(log.deviceId, log.deviceName);
+            try {
+                const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+                if (Array.isArray(parsed)) {
+                    parsed.forEach(item => processItem(item));
+                } else {
+                    processItem(parsed);
+                }
+                refreshDisplay();
+            } catch (e) { console.error(e); }
+        });
+
+        function processItem(log) {
+            const dId = log.deviceId || log.device_id || 'unknown';
+            const dName = log.deviceName || log.device_name || 'Unknown Device';
+            
+            if (!devices.has(dId) || log.metadata) {
+                devices.set(dId, { name: dName, metadata: log.metadata || devices.get(dId)?.metadata || {} });
                 updateDeviceList();
             }
-            log.time = new Date().toLocaleTimeString();
-            logs.push(log);
-            if (logs.length > 2000) logs.shift();
-            renderLog(log);
-        });
 
-        pusher.connection.bind('state_change', (states) => {
-            document.getElementById('status').innerText = 'Status: ' + states.current;
-        });
+            allLogs.push({
+                id: dId,
+                name: dName,
+                level: (log.level || 'info').toLowerCase(),
+                content: log.content,
+                ts: log.timestamp ? log.timestamp * 1000 : Date.now(),
+                timeStr: formatTime(log.timestamp ? log.timestamp * 1000 : Date.now())
+            });
+            if (allLogs.length > 3000) allLogs.shift();
+        }
 
-        function renderLog(log) {
-            if (currentDeviceId !== 'all' && log.deviceId !== currentDeviceId) return;
-            const term = document.getElementById('searchInput').value.toLowerCase();
-            const contentStr = JSON.stringify(log.content);
-            if (term && !contentStr.toLowerCase().includes(term)) return;
-
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            const color = log.level === 'error' ? '#f48771' : (log.level === 'warn' ? '#d7ba7d' : '#6a9955');
-            div.innerHTML = `<span class="time">${log.time}</span><span class="tag" style="background:${color}">${log.level || 'INFO'}</span><span style="color:#569cd6">[${log.deviceName}]</span> <span style="color:#ce9178">${contentStr}</span>`;
-            
-            const list = document.getElementById('log-list');
-            list.appendChild(div);
-            const container = document.getElementById('log-container');
-            container.scrollTop = container.scrollHeight;
+        function formatTime(ms) {
+            const d = new Date(ms);
+            return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`;
         }
 
         function updateDeviceList() {
             const list = document.getElementById('device-list');
-            list.innerHTML = `<div class="device-item ${currentDeviceId === 'all' ? 'active' : ''}" onclick="filterDevice('all')"><div class="device-dot"></div><span>全部设备</span></div>`;
-            devices.forEach((name, id) => {
+            const groups = Array.from(list.querySelectorAll('.device-group'));
+            const activeGroup = groups.find(g => g.querySelector('.device-item').classList.contains('active'));
+            const expandedId = activeGroup?.id;
+
+            list.innerHTML = `
+                <div class="device-group ${currentDeviceId === 'all' ? 'expanded' : ''}" id="group-all">
+                    <div class="device-item ${currentDeviceId === 'all' ? 'active' : ''}" onclick="selectDevice('all')">
+                        <div style="display:flex; align-items:center">
+                            <div style="width:8px;height:8px;background:#4caf50;border-radius:50%;margin-right:10px"></div>
+                            <span>全部设备</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            devices.forEach((data, id) => {
+                const meta = data.metadata || {};
+                const fields = [
+                    { k: 'UID', v: meta.user_id },
+                    { k: 'User', v: meta.username },
+                    { k: 'OS', v: meta.osVersion },
+                    { k: 'IMEI', v: meta.imei },
+                    { k: 'FCM', v: meta.fcm_token },
+                    { k: 'Copy', v: meta.copyText }
+                ];
+                
+                const group = document.createElement('div');
+                group.className = `device-group ${currentDeviceId === id ? 'expanded' : ''}`;
+                group.id = `group-${id}`;
+                
+                let detailsHtml = '<div class="device-details">';
+                fields.forEach(f => {
+                    if (f.v) {
+                        detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val">${f.v} <span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div></div>`;
+                    }
+                });
+                detailsHtml += '</div>';
+
+                group.innerHTML = `
+                    <div class="device-item ${currentDeviceId === id ? 'active' : ''}" onclick="selectDevice('${id}')">
+                        <div style="display:flex; align-items:center">
+                            <div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div>
+                            <span>${data.name}</span>
+                        </div>
+                        <svg class="chevron" viewBox="0 0 24 24"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+                    </div>
+                    ${detailsHtml}
+                `;
+                list.appendChild(group);
+            });
+        }
+
+        function selectDevice(id) {
+            if (currentDeviceId === id && id !== "all") {
+                currentDeviceId = "all";
+            } else {
+                currentDeviceId = id;
+            }
+            updateDeviceList();
+            refreshDisplay();
+        }
+
+        function copyText(text, event) {
+            event.stopPropagation();
+            navigator.clipboard.writeText(text).then(() => alert('已复制'));
+        }
+
+        function refreshDisplay() {
+            const list = document.getElementById('log-list');
+            list.innerHTML = '';
+            const term = document.getElementById('searchInput').value.toLowerCase();
+            let displayLogs = allLogs.filter(l => (currentDeviceId === 'all' || l.id === currentDeviceId) && (!term || JSON.stringify(l.content).toLowerCase().includes(term)));
+            displayLogs.sort((a, b) => sortDesc ? b.ts - a.ts : a.ts - b.ts);
+            displayLogs.forEach(log => {
                 const div = document.createElement('div');
-                div.className = `device-item ${currentDeviceId === id ? 'active' : ''}`;
-                div.onclick = () => filterDevice(id);
-                div.innerHTML = `<div class="device-dot" style="background:#2196f3"></div><span>${name}</span>`;
+                div.className = 'log-entry';
+                const colors = { error: '#f48771', warn: '#d7ba7d', info: '#6a9955' };
+                const levelColor = colors[log.level] || colors.info;
+                div.innerHTML = `<span class="time">${log.timeStr}</span><span class="tag" style="background:${levelColor}">${log.level.toUpperCase()}</span><span style="color:#569cd6">[${log.name}]</span> <span style="color:#ce9178">${JSON.stringify(log.content, null, 2)}</span>`;
                 list.appendChild(div);
             });
         }
 
-        function filterDevice(id) {
-            currentDeviceId = id;
-            updateDeviceList();
-            document.getElementById('log-list').innerHTML = '';
-            logs.forEach(renderLog);
+        function toggleSort() {
+            sortDesc = !sortDesc;
+            document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑";
+            refreshDisplay();
         }
 
-        function clearLogs() {
-            logs = [];
-            document.getElementById('log-list').innerHTML = '';
-        }
-        
-        document.getElementById('searchInput').oninput = () => {
-            document.getElementById('log-list').innerHTML = '';
-            logs.forEach(renderLog);
-        };
+        function clearLogs() { allLogs = []; refreshDisplay(); }
+        document.getElementById('searchInput').oninput = () => refreshDisplay();
+        pusher.connection.bind('state_change', (s) => document.getElementById('status').innerText = 'Status: ' + s.current);
     </script>
 </body>
 </html>
