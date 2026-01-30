@@ -111,7 +111,7 @@
             const dName = log.deviceName || log.device_name || 'Unknown Device';
             
             if (!devices.has(dId) || log.metadata) {
-                devices.set(dId, { name: dName, metadata: log.metadata || devices.get(dId)?.metadata || {} });
+                devices.set(dId, { name: dName, metadata: log.metadata ? log.metadata : (devices.get(dId)?.metadata || {}) });
                 updateDeviceList();
             }
 
