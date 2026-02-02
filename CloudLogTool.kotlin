@@ -1,0 +1,260 @@
+import android.content.Context
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.IOException
+import java.util.concurrent.TimeUnit
+
+/**
+ * Konvy 云端日志工具 (Android 版)
+ * 适配 KonvyLogHub V2.0 协议
+ */
+object CloudLogTool {
+    private const val TAG = "CloudLogTool"
+
+    // --- 配置区 ---
+    private const val WORKER_URL = "https://konvyloghub.pages.dev/report"
+    private const val AUTH_TOKEN = "konvy-debug-2026"
+    private const val BATCH_INTERVAL = 3000L // 3秒合并一次
+    private const val MAX_BATCH_BYTES = 900 * 1024 // 适配 Supabase 1MiB
+限制，取 900KB
+
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .build()
+
+    private val logBuffer = mutableListOf<JSONObject>()
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastMetadata: JSONObject? = null
+    private var sendRunnable: Runnable? = null
+
+    /**
+     * 普通日志上报
+     */
+    fun log(context: Context, content: Any?, level: String = "info") {
+        if (content == null) return
+        val logItem = createBaseLog(context, level)
+        logItem.put("content", content)
+
+        attachMetadata(context, logItem)
+        addToBuffer(logItem)
+    }
+
+    /**
+     * 网络日志上报 (用于 Network Tab)
+     */
+    fun logNetwork(
+        context: Context,
+        url: String,
+        method: String,
+        requestHeaders: Map<String, String>?,
+        requestBody: Any?,
+        responseHeaders: Map<String, String>?,
+        responseBody: Any?,
+        statusCode: Int,
+        durationMs: Long
+    ) {
+        val logItem = createBaseLog(context, "info")
+        logItem.put("type", "network") // 核心字段
+        logItem.put("method", method.uppercase())
+        logItem.put("url", url)
+        logItem.put("status", statusCode)
+        logItem.put("duration", durationMs)
+
+        val reqObj = JSONObject().apply {
+            put("headers", JSONObject(requestHeaders ?: emptyMap<String,
+String>()))
+            put("body", processBody(requestBody))
+        }
+        val resObj = JSONObject().apply {
+            put("headers", JSONObject(responseHeaders ?: emptyMap<String,
+String>()))
+            put("body", processBody(responseBody))
+        }
+
+        logItem.put("request", reqObj)
+        logItem.put("response", resObj)
+
+        attachMetadata(context, logItem)
+        addToBuffer(logItem)
+    }
+
+    private fun createBaseLog(context: Context, level: String): JSONObjec
+{
+        return JSONObject().apply {
+            put("deviceId", getDeviceId(context))
+            put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+            put("level", level)
+            put("timestamp", System.currentTimeMillis() / 1000.0)
+        }
+    }
+
+    private fun attachMetadata(context: Context, logItem: JSONObject) {
+        val currentMetadata = JSONObject().apply {
+            put("user_id", getUserId())
+            put("username", getUserName())
+            put("fcm_token", getFcmToken())
+            put("imei", getDeviceId(context))
+            put("deviceName", "${Build.MANUFACTURER} ${Build.MODEL}")
+            put("osVersion", "Android ${Build.VERSION.RELEASE}")
+            put("appVersion", getAppVersion(context))
+        }
+
+        // 仅在 Metadata 变化时携带
+        if (lastMetadata == null || lastMetadata.toString() !=
+currentMetadata.toString()) {
+            logItem.put("metadata", currentMetadata)
+            lastMetadata = currentMetadata
+        }
+    }
+
+    private fun addToBuffer(item: JSONObject) {
+        synchronized(logBuffer) {
+            logBuffer.add(item)
+            if (sendRunnable == null) {
+                sendRunnable = Runnable { flush() }
+                handler.postDelayed(sendRunnable!!, BATCH_INTERVAL)
+            }
+        }
+    }
+
+    private fun flush() {
+        val logsToSend: List<JSONObject>
+        synchronized(logBuffer) {
+            logsToSend = ArrayList(logBuffer)
+            logBuffer.clear()
+            sendRunnable = null
+        }
+        if (logsToSend.isNotEmpty()) performUpload(logsToSend)
+    }
+
+    private fun performUpload(logs: List<JSONObject>) {
+        var currentChunk = JSONArray()
+        var currentSize = 0
+
+        for (log in logs) {
+            val logStr = log.toString()
+            val logBytes = logStr.toByteArray().size
+
+            if (logBytes >= MAX_BATCH_BYTES) {
+                Log.w(TAG, "⚠️ Single log too large ($logBytes bytes),
+skipping.")
+                continue
+            }
+
+            if (currentSize + logBytes > MAX_BATCH_BYTES) {
+                sendHttpRequest(currentChunk.toString())
+                currentChunk = JSONArray()
+                currentSize = 0
+            }
+
+            currentChunk.put(log)
+            currentSize += logBytes
+        }
+
+        if (currentChunk.length() > 0) {
+            sendHttpRequest(currentChunk.toString())
+        }
+    }
+
+    private fun sendHttpRequest(jsonString: String) {
+        val request = Request.Builder()
+            .url(WORKER_URL)
+
+.post(jsonString.toRequestBody("application/json".toMediaType()))
+            .addHeader("Authorization", AUTH_TOKEN)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.e(TAG, "☁️ CloudLog Error: ${e.message}")
+            }
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+            }
+        })
+    }
+
+    private fun processBody(body: Any?): Any {
+        if (body == null) return ""
+        if (body is JSONObject || body is JSONArray) return body
+        if (body is String) {
+            return try { JSONObject(body) } catch (e: Exception) { try {
+JSONArray(body) } catch (e2: Exception) { body } }
+        }
+        if (body is ByteArray) {
+            if (body.size > 1024 * 512) return "[Body too large:
+${body.size} bytes]"
+            val str = String(body)
+            return try { JSONObject(str) } catch (e: Exception) { str }
+        }
+        return body.toString()
+    }
+
+    // --- 业务数据抓取 (请 Android 同事实现) ---
+    private fun getDeviceId(context: Context): String =
+android.provider.Settings.Secure.getString(context.contentResolver,
+android.provider.Settings.Secure.ANDROID_ID) ?: "unknown"
+    private fun getUserId(): String = ""
+    private fun getUserName(): String = ""
+    private fun getFcmToken(): String = ""
+    private fun getAppVersion(context: Context): String = try {
+context.packageManager.getPackageInfo(context.packageName, 0).versionName
+catch (e: Exception) { "unknown" }
+
+    /**
+     * OkHttp 拦截器：自动捕获所有网络请求
+     */
+    class Interceptor(private val context: Context) : okhttp3.Interceptor
+        override fun intercept(chain: okhttp3.Interceptor.Chain): Respons
+{
+            val request = chain.request()
+            val startTime = System.nanoTime()
+
+            val response = try {
+                chain.proceed(request)
+            } catch (e: Exception) {
+                // 可选：在此处上报网络异常日志
+                throw e
+            }
+
+            val durationMs =
+TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startTime)
+
+            // 抓取请求体
+            val reqBody = request.body?.let { body ->
+                val buffer = Buffer()
+                body.writeTo(buffer)
+                buffer.readByteArray()
+            }
+
+            // 抓取响应体 (使用 peekBody 防止流被关闭)
+            val resBody = response.peekBody(1024 * 512).bytes()
+
+            // 转换 Headers
+            val reqHeaders = request.headers.toMap()
+            val resHeaders = response.headers.toMap()
+
+            logNetwork(
+                context,
+                request.url.toString(),
+                request.method,
+                reqHeaders,
+                reqBody,
+                resHeaders,
+                resBody,
+                response.code,
+                durationMs
+            )
+
+            return response
+        }
+    }
+}
