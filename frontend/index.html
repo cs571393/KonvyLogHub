@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Konvy Log Dashboard v2.8</title>
+    <title>Konvy Log Dashboard v3.0</title>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
@@ -39,32 +39,19 @@
         .info-key { width: 85px; color: #858585; flex-shrink: 0; }
         .info-val { color: #ce9178; word-break: break-all; flex: 1; }
         .copy-btn { color: var(--accent-color); cursor: pointer; font-size: 10px; }
+        .copy-btn:hover { text-decoration: underline; }
         
         .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
         .tabs { display: flex; background: #2d2d2d; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
         .tab { padding: 10px 20px; cursor: pointer; font-size: 12px; color: #858585; border-right: 1px solid var(--border-color); background: #252526; }
         .tab:hover { background: #2a2d2e; color: #d4d4d4; }
         .tab.active { background: var(--bg-color); color: var(--text-color); border-top: 2px solid var(--accent-color); }
-
         .view-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .toolbar { height: 45px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; padding: 0 15px; gap: 10px; flex-shrink: 0; }
         
         /* Log Styling */
         .log-container { flex: 1; overflow-y: auto; padding: 12px; font-size: 12px; line-height: 1.6; }
-        .log-entry { 
-            margin-bottom: 8px; 
-            padding: 8px 12px; 
-            border-radius: 4px;
-            background: rgba(255,255,255,0.02);
-            border-left: 3px solid transparent;
-            white-space: pre-wrap; 
-            word-break: break-all; 
-            display: flex;
-            flex-wrap: wrap;
-            align-items: flex-start;
-            gap: 8px;
-        }
-        .log-entry:hover { background: rgba(255,255,255,0.04); }
+        .log-entry { margin-bottom: 8px; padding: 8px 12px; border-radius: 4px; background: rgba(255,255,255,0.02); border-left: 3px solid transparent; white-space: pre-wrap; word-break: break-all; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; }
         .log-info-meta { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
         .time { color: #858585; font-weight: bold; font-family: 'Courier New', monospace; }
         .tag { padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; color: #fff; text-transform: uppercase; }
@@ -89,42 +76,52 @@
         .network-row:hover { background: #2a2d2e; }
         .network-row.expanded { background: #37373d; }
         .network-row.expanded td { white-space: normal; word-break: break-all; }
-
         .method-tag { font-weight: bold; font-size: 10px; padding: 2px 5px; border-radius: 3px; color: #fff; display: inline-block; width: 45px; text-align: center; }
         .status-tag { color: var(--status-ok); font-weight: bold; }
         .status-tag.error { color: var(--status-error); }
-        
-        .network-details { background: #1a1a1b; padding: 20px; border-bottom: 2px solid var(--accent-color); display: none; }
+        .network-details { background: #1a1a1b; padding: 0; border-bottom: 2px solid var(--accent-color); display: none; }
         .network-row.expanded + .network-details-row .network-details { display: block; }
-        
-        .detail-section { margin-bottom: 20px; }
-        .detail-header { display: flex; align-items: center; margin-bottom: 8px; gap: 12px; flex-wrap: wrap; }
+        .detail-section { margin-bottom: 0; border-bottom: 1px solid #333; }
+        .detail-header { display: flex; align-items: center; padding: 10px 15px; background: #252526; gap: 12px; flex-wrap: wrap; }
         .detail-title { font-weight: bold; color: #858585; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-        .detail-content { 
-            background: #111; 
-            padding: 12px; 
-            border-radius: 4px; 
-            overflow: auto; 
-            font-size: 11px; 
-            max-height: 500px; 
-            border: 1px solid #2d2d2d;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-break: break-all;
+        
+        /* Breadcrumb Bar */
+        .json-breadcrumb { 
+            background: #1e1e1e; 
+            padding: 4px 15px; 
+            font-size: 10px; 
+            color: #888; 
+            border-bottom: 1px solid #2d2d2d;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            cursor: pointer;
+            min-height: 14px;
         }
+        .json-breadcrumb:hover { color: var(--accent-color); background: #252526; }
+        .json-breadcrumb span { color: #569cd6; font-weight: bold; }
 
-        /* JSON Tree */
-        .json-tree { line-height: 1.6; color: #d4d4d4; }
-        .json-item { margin-left: 15px; }
-        .json-summary { cursor: pointer; color: #858585; outline: none; list-style: none; display: flex; align-items: center; padding: 2px 0; }
-        .json-summary::before { content: '▶'; display: inline-block; width: 12px; font-size: 8px; transition: transform 0.2s; margin-right: 4px; }
+        .detail-content { background: #111; padding: 10px 15px; overflow: auto; font-size: 11px; max-height: 500px; position: relative; }
+
+        /* Enhanced JSON Tree */
+        .json-tree { line-height: 1.4; color: #d4d4d4; padding-bottom: 10px; }
+        .json-item { margin: 0; padding: 0; }
+        .json-summary { cursor: pointer; color: #858585; outline: none; list-style: none; display: flex; align-items: center; padding: 1px 0; font-size: 11px; }
+        .json-summary::-webkit-details-marker { display: none; }
+        .json-summary::before { content: '▶'; display: inline-block; width: 14px; font-size: 7px; transition: transform 0.1s; margin-right: 2px; text-align: center; }
         details[open] > .json-summary::before { transform: rotate(90deg); }
-        .json-key { color: #9cdcfe; margin-right: 5px; }
+        .json-key { color: #9cdcfe; margin-right: 4px; cursor: crosshair; }
         .json-string { color: #ce9178; }
         .json-number { color: #b5cea8; }
         .json-boolean, .json-null { color: #569cd6; }
-        .json-row { margin: 3px 0; display: flex; align-items: flex-start; }
-        .json-content { border-left: 1px solid #333; margin-left: 6px; padding-left: 10px; }
+        .json-row { margin: 1px 0; display: flex; align-items: flex-start; padding-left: 14px; transition: background 0.1s; border-radius: 2px; }
+        .json-row:hover { background: rgba(255,255,255,0.05); }
+        .json-content { border-left: 1px solid rgba(255,255,255,0.1); margin-left: 6px; padding-left: 8px; transition: border-color 0.2s; }
+        .json-row:hover > .json-content { border-left-color: var(--accent-color); }
+        .json-size { color: #569cd6; font-size: 10px; margin-left: 6px; opacity: 0.5; font-style: italic; }
     </style>
 </head>
 <body>
@@ -272,22 +269,12 @@
         }
 
         function createLogRow(log) {
-            const div = document.createElement('div');
-            div.className = 'log-entry';
+            const div = document.createElement('div'); div.className = 'log-entry';
             const colors = {error:'#f48771',warn:'#d7ba7d',info:'#6a9955',debug:'#b5cea8'};
             const levelColor = colors[log.level] || colors.info;
             div.style.borderLeftColor = levelColor;
-            
             const content = typeof log.content === 'object' ? JSON.stringify(log.content, null, 2) : String(log.content);
-            
-            div.innerHTML = `
-                <div class="log-info-meta">
-                    <span class="time">${log.timeStr}</span>
-                    <span class="tag" style="background:${levelColor}">${log.level}</span>
-                    <span class="device-name-tag">[${log.name}]</span>
-                </div>
-                <div class="log-content">${content}</div>
-            `;
+            div.innerHTML = `<div class="log-info-meta"><span class="time">${log.timeStr}</span><span class="tag" style="background:${levelColor}">${log.level}</span><span class="device-name-tag">[${log.name}]</span></div><div class="log-content">${content}</div>`;
             return div;
         }
 
@@ -339,8 +326,28 @@
                         <span class="search-count" style="font-size:10px; color:#666; display:none;">0/0</span>
                     </div>
                 </div>
-                <div class="detail-content">${formatJsonView(data)}</div>
+                <div class="json-breadcrumb" onclick="copyPath(this)">Path: <span>root</span></div>
+                <div class="detail-content" onmouseover="handleJsonHover(event)">${formatJsonView(data)}</div>
             </div>`;
+        }
+
+        function handleJsonHover(e) {
+            const row = e.target.closest('.json-row, .json-summary');
+            if (!row) return;
+            const path = row.getAttribute('data-path');
+            if (path) {
+                const breadcrumb = row.closest('.detail-section').querySelector('.json-breadcrumb span');
+                breadcrumb.innerText = path;
+            }
+        }
+
+        function copyPath(el) {
+            const path = el.querySelector('span').innerText;
+            navigator.clipboard.writeText(path).then(() => {
+                const original = el.innerHTML;
+                el.innerText = '已复制路径!';
+                setTimeout(() => el.innerHTML = original, 1000);
+            });
         }
 
         function searchInJson(input) {
@@ -400,29 +407,28 @@
         function formatJsonView(data) {
             let obj = data;
             if (typeof data === 'string') { try { obj = JSON.parse(data); } catch(e) { return `<span class="json-string">${data}</span>`; } }
-            return `<div class="json-tree">${createJsonTreeNode(obj, true)}</div>`;
+            return `<div class="json-tree">${createJsonTreeNode(obj, true, "root")}</div>`;
         }
 
-        function createJsonTreeNode(data, isRoot = false) {
-            if (data === null) return '<span class="json-null">null</span>';
+        function createJsonTreeNode(data, isRoot = false, path = "") {
+            if (data === null) return `<span class="json-null" data-path="${path}">null</span>`;
             const type = typeof data;
             if (type !== 'object') {
-                if (type === 'string') return `<span class="json-string">"${data}"</span>`;
-                if (type === 'number') return `<span class="json-number">${data}</span>`;
-                if (type === 'boolean') return `<span class="json-boolean">${data}</span>`;
-                return data;
+                const val = type === 'string' ? `"${data}"` : data;
+                return `<span class="json-${type}" data-path="${path}">${val}</span>`;
             }
             const isArray = Array.isArray(data);
             const keys = Object.keys(data);
             if (keys.length === 0) return isArray ? '[]' : '{}';
             let html = `<details class="json-item" ${isRoot?'open':''}>`;
-            html += `<summary class="json-summary">${isArray?'Array':'Object'}<span class="json-size">${keys.length} items</span></summary>`;
+            html += `<summary class="json-summary" data-path="${path}">${isArray?'Array':'Object'}<span class="json-size">${keys.length} items</span></summary>`;
             html += `<div class="json-content">`;
             keys.forEach((key, index) => {
-                html += `<div class="json-row">`;
+                const subPath = isArray ? `${path}[${index}]` : (path ? `${path}.${key}` : key);
+                html += `<div class="json-row" data-path="${subPath}">`;
                 if (isArray) html += `<span class="json-key" style="opacity: 0.6">[${index}]:</span>`;
                 else html += `<span class="json-key">"${key}":</span>`;
-                html += createJsonTreeNode(data[key]);
+                html += createJsonTreeNode(data[key], false, subPath);
                 html += `</div>`;
             });
             html += `</div></details>`;
