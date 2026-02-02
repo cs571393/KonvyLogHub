@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Konvy Log Dashboard v1.9</title>
-    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <style>
         :root {
             --bg-color: #1e1e1e;
@@ -78,8 +78,8 @@
 
     <script>
         // --- 核心配置 ---
-        const PUSHER_KEY = '562d8abb0be1266edf50'; 
-        const PUSHER_CLUSTER = 'us2';
+        const SUPABASE_URL = 'https://dehcpksgjhyvoyccafnj.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlaGNwa3Nnamh5dm95Y2NhZm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU5MzAsImV4cCI6MjA4NTU1MTkzMH0.f51lBltot16OF2HmifWqUdl4sOe1SOO7f4c5k5rMAqg';
 
         let currentDeviceId = 'all';
         let sortDesc = true;
@@ -96,23 +96,51 @@
             }
         } catch (e) { console.error("Restore failed", e); }
 
-        const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
-        const channel = pusher.subscribe('konvy-logs');
+        const { createClient } = supabase;
+        const _supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+            realtime: {
+                params: {
+                    eventsPerSecond: 10
+                }
+            }
+        });
+        
+        // 强制使用 Long Polling (如果环境不支持 WebSocket 或网络不稳定)
+        // 注意：目前 Supabase JS SDK 默认会自动降级，但我们可以手动配置
+        const channel = _supabase.channel('konvy-logs', {
+            config: { 
+                broadcast: { self: false }
+            }
+        });
 
         // 初始化显示
         updateDeviceList();
 
-        channel.bind('log-event', (data) => {
-            try {
-                const parsed = typeof data === 'string' ? JSON.parse(data) : data;
-                if (Array.isArray(parsed)) {
-                    parsed.forEach(item => processItem(item));
-                } else {
-                    processItem(parsed);
+        channel
+            .on('broadcast', { event: 'log-event' }, ({ payload }) => {
+                try {
+                    // 后端现在包裹了一层 { data: ... } 以避免 422 错误
+                    const parsed = payload.data || payload; 
+                    if (Array.isArray(parsed)) {
+                        parsed.forEach(item => processItem(item));
+                    } else {
+                        processItem(parsed);
+                    }
+                    refreshDisplay();
+                } catch (e) { console.error(e); }
+            })
+            .subscribe((status, err) => {
+                let msg = 'Status: ' + status;
+                if (status === 'CHANNEL_ERROR' && err) {
+                    console.error('Realtime Error:', err);
+                    msg += ' (' + (err.message || JSON.stringify(err)) + ')';
                 }
-                refreshDisplay();
-            } catch (e) { console.error(e); }
-        });
+                document.getElementById('status').innerText = msg;
+                
+                if (status === 'SUBSCRIBED') {
+                    console.log('Successfully connected to Supabase Realtime');
+                }
+            });
 
         function processItem(log) {
             const dId = log.deviceId || log.device_id || 'unknown';
@@ -271,7 +299,6 @@
         }
 
         document.getElementById('searchInput').oninput = () => refreshDisplay();
-        pusher.connection.bind('state_change', (s) => document.getElementById('status').innerText = 'Status: ' + s.current);
     </script>
 </body>
 </html>
