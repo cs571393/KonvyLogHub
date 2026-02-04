@@ -452,12 +452,13 @@
             devices.forEach((data, id) => {
                 const meta = data.metadata || {};
                 const fields = [{k:'UID',v:meta.user_id},{k:'User',v:meta.username},{k:'Version',v:meta.appVersion},{k:'OS',v:meta.osVersion},{k:'IMEI',v:meta.imei},{k:'FCM',v:meta.fcm_token},{k:'Copy',v:meta.copyText}];
+                const displayName = meta.username ? `${data.name} (${meta.username})` : data.name;
                 const group = document.createElement('div');
                 group.className = `device-group ${currentDeviceId===id?'expanded':''}`;
                 let detailsHtml = '<div class="device-details">';
                 fields.forEach(f => { if(f.v) detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val">${f.v} <span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div></div>`; });
                 detailsHtml += '</div>';
-                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice('${id}')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${data.name}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div>${detailsHtml}`;
+                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice('${id}')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${displayName}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div>${detailsHtml}`;
                 list.appendChild(group);
             });
         }
