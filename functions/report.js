@@ -29,7 +29,7 @@ export async function onRequestPost(context) {
     }
 
     // --- 逻辑 B: 移动端上报日志 (兼任心跳获取指令) ---
-    const logData = await request.json().catch(() => data); // 兼容已经 parse 过的情况
+    const logData = data; 
     
     // 检查该设备是否有待处理指令
     // 如果 logData 是数组，取第一个元素的 deviceId
@@ -87,12 +87,16 @@ export async function onRequestOptions() {
   return new Response(null, {
     headers: {
       "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST",
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Access-Control-Max-Age": "86400",
     }
   });
 }
 
 export async function onRequestGet() {
-  return new Response("Only POST allowed", { status: 405 });
+  return new Response("Only POST allowed", { 
+    status: 405,
+    headers: { "Access-Control-Allow-Origin": "*" } 
+  });
 }

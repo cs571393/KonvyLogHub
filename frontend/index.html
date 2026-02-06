@@ -183,6 +183,7 @@
     <script>
         const SUPABASE_URL = 'https://dehcpksgjhyvoyccafnj.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlaGNwa3Nnamh5dm95Y2NhZm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU5MzAsImV4cCI6MjA4NTU1MTkzMH0.f51lBltot16OF2HmifWqUdl4sOe1SOO7f4c5k5rMAqg';
+        const REPORT_API = 'https://konvyloghub.pages.dev/report';
         let currentDeviceId = 'all';
         let sortDesc = true;
         let allLogs = [];
@@ -490,7 +491,7 @@
 
             try {
                 // 利用 report 接口的特殊 action 下发指令
-                const res = await fetch('/report?action=push_command', {
+                const res = await fetch(`${REPORT_API}?action=push_command`, {
                     method: 'POST',
                     headers: { 
                         'Content-Type': 'application/json',
