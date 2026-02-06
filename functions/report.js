@@ -1,6 +1,3 @@
-// 指令暂存池 (内存方式)
-const PENDING_COMMANDS = new Map();
-
 export async function onRequestPost(context) {
   const { request, env } = context;
   const url = new URL(request.url);
@@ -20,12 +17,10 @@ export async function onRequestPost(context) {
       const { deviceId, command, payload } = data;
       if (!deviceId) return new Response("Missing deviceId", { status: 400 });
       
-      // 存入内存，设置 60s 过期，防止内存无限增长
-      PENDING_COMMANDS.set(deviceId, { 
-        command, 
-        payload, 
-        expires: Date.now() + 60000 
-      });
+      // 使用 Cloudflare KV 存储，设置 60s 过期
+      if (env.COMMAND_KV) {
+        await env.COMMAND_KV.put(deviceId, JSON.stringify({ command, payload }), { expirationTtl: 60 });
+      }
       
       return new Response(JSON.stringify({ status: "queued" }), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
@@ -38,22 +33,14 @@ export async function onRequestPost(context) {
     const dId = sample?.deviceId || sample?.device_id;
     
     let commands = [];
-    if (dId && PENDING_COMMANDS.has(dId)) {
-      const cmd = PENDING_COMMANDS.get(dId);
-      
-      // 检查是否过期
-      if (Date.now() < cmd.expires) {
+    if (dId && env.COMMAND_KV) {
+      // 从 KV 获取指令
+      const stored = await env.COMMAND_KV.get(dId);
+      if (stored) {
+        const cmd = JSON.parse(stored);
         commands.push({ command: cmd.command, payload: cmd.payload });
-      }
-      
-      // 【自动清除】取走即焚，无论是否过期都删掉
-      PENDING_COMMANDS.delete(dId);
-    }
-
-    // 清理一下其他过期的指令 (简单的 GC 逻辑)
-    if (PENDING_COMMANDS.size > 100) {
-      for (const [id, c] of PENDING_COMMANDS.entries()) {
-        if (Date.now() > c.expires) PENDING_COMMANDS.delete(id);
+        // 【自动清除】取走即焚
+        await env.COMMAND_KV.delete(dId);
       }
     }
 
