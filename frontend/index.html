@@ -127,9 +127,51 @@
         .json-content { border-left: 1px solid rgba(255,255,255,0.1); margin-left: 6px; padding-left: 8px; transition: border-color 0.2s; }
         .json-row:hover > .json-content { border-left-color: var(--accent-color); }
         .json-size { color: #569cd6; font-size: 10px; margin-left: 6px; opacity: 0.5; font-style: italic; }
+        .network-row.selected { background: rgba(0, 122, 204, 0.2) !important; }
+        .compare-bar { position: fixed; bottom: 20px; right: 20px; background: var(--accent-color); color: white; padding: 10px 20px; border-radius: 20px; display: none; align-items: center; gap: 15px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 1000; cursor: pointer; }
+        
+        /* Modal Styling */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); z-index: 2000; display: none; align-items: center; justify-content: center; }
+        .modal-content { width: 95%; height: 90%; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 8px; display: flex; flex-direction: column; overflow: hidden; }
+        .modal-header { padding: 15px; background: var(--sidebar-bg); border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; }
+        .modal-body { flex: 1; overflow: auto; padding: 0; }
+        
+        .compare-table { width: 100%; border-collapse: collapse; font-size: 11px; table-layout: fixed; }
+        .compare-table th, .compare-table td { padding: 10px; border: 1px solid #333; word-break: break-all; vertical-align: top; }
+        .compare-table th { background: #252526; color: #858585; position: sticky; left: 0; z-index: 5; text-align: left; width: 150px; }
+        .compare-table td { background: #1e1e1e; }
+        .compare-table tr.same-row { display: table-row; }
+        .compare-table.hide-same tr.same-row { display: none; }
+        .diff-tag { background: #4b1111; padding: 2px 4px; border-radius: 2px; }
     </style>
 </head>
 <body>
+    <div id="compare-bar" class="compare-bar" onclick="showCompareModal()">
+        <span id="compare-count">已选中 0 个请求</span>
+        <strong>开始对比</strong>
+    </div>
+
+    <div id="compare-modal" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <div style="display:flex; align-items:center; gap: 20px; flex: 1;">
+                    <strong style="font-size:16px;">API 参数对比</strong>
+                    <div style="display:flex; gap:12px; font-size:11px; background: #111; padding: 4px 10px; border-radius: 4px; border: 1px solid #333;">
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="show-url-params" checked onchange="showCompareModal()"> URL参数</label>
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:4px; margin-left:10px; border-left: 1px solid #444; padding-left:10px;"><input type="checkbox" id="show-req-headers" checked onchange="showCompareModal()"> 请求头</label>
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="show-req-body" checked onchange="showCompareModal()"> 请求体</label>
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:4px; margin-left:10px; border-left: 1px solid #444; padding-left:10px;"><input type="checkbox" id="show-res-headers" onchange="showCompareModal()"> 响应头</label>
+                        <label style="cursor:pointer; display:flex; align-items:center; gap:4px;"><input type="checkbox" id="show-res-body" onchange="showCompareModal()"> 响应体</label>
+                    </div>
+                    <label style="font-size:12px; display:flex; align-items:center; gap:5px; cursor:pointer; margin-left: 10px;">
+                        <input type="checkbox" id="hide-same-toggle" onchange="toggleHideSame()"> 隐藏相同项
+                    </label>
+                </div>
+                <button onclick="closeCompareModal()" style="padding: 5px 15px; cursor:pointer;">关闭</button>
+            </div>
+            <div id="compare-body" class="modal-body"></div>
+        </div>
+    </div>
     <div class="container">
         <div class="sidebar">
             <div class="sidebar-header">设备列表 (Devices)</div>
@@ -159,6 +201,10 @@
             <div id="view-network" class="view-content" style="display:none">
                 <div class="toolbar">
                     <input type="text" id="networkSearchInput" placeholder="搜索 URL/Method..." style="width: 180px;" oninput="refreshNetworkDisplay()">
+                    <div id="selection-tips" style="margin-left: 15px; font-size: 11px; color: #aaa; display: flex; align-items: center; gap: 10px;">
+                        <span>💡 按住 <b>Ctrl/Cmd + 点击</b> 可多选对比</span>
+                        <button id="clear-selection-btn" onclick="clearNetworkSelection()" style="display:none; padding: 2px 8px; font-size: 10px; cursor: pointer;">取消选择</button>
+                    </div>
                     <div style="flex:1"></div>
                     <span style="font-size:11px; color: #858585" id="network-count">0 requests</span>
                 </div>
@@ -192,6 +238,7 @@
         const observedLevels = new Set();
         let devices = new Map();
         const searchState = new Map(); 
+        let selectedNetworkLogs = new Set();
 
         try {
             const saved = localStorage.getItem('konvy_devices');
@@ -219,7 +266,22 @@
             }
             let processed;
             if (log.type === 'network') {
-                processed = { id: dId, name: dName, method: (log.method || 'GET').toUpperCase(), url: log.url || '', status: log.status || 0, duration: log.duration || 0, reqHeaders: log.request?.headers, reqBody: log.request?.body, resHeaders: log.response?.headers, resBody: log.response?.body, ts: log.timestamp ? log.timestamp * 1000 : Date.now(), timeStr: formatTime(log.timestamp ? log.timestamp * 1000 : Date.now()), type: 'network' };
+                processed = { 
+                    id: dId, 
+                    logId: 'net_' + Math.random().toString(36).substr(2, 9),
+                    name: dName, 
+                    method: (log.method || 'GET').toUpperCase(), 
+                    url: log.url || '', 
+                    status: log.status || 0, 
+                    duration: log.duration || 0, 
+                    reqHeaders: log.request?.headers, 
+                    reqBody: log.request?.body, 
+                    resHeaders: log.response?.headers, 
+                    resBody: log.response?.body, 
+                    ts: log.timestamp ? log.timestamp * 1000 : Date.now(), 
+                    timeStr: formatTime(log.timestamp ? log.timestamp * 1000 : Date.now()), 
+                    type: 'network' 
+                };
                 networkLogs.push(processed);
                 if (networkLogs.length > 1000) networkLogs.shift();
             } else {
@@ -261,7 +323,17 @@
         function createNetworkRow(log) {
             const tr = document.createElement('tr');
             tr.className = 'network-row';
-            tr.onclick = () => tr.classList.toggle('expanded');
+            if (selectedNetworkLogs.has(log.logId)) tr.classList.add('selected');
+            
+            tr.onclick = (e) => {
+                if (e.ctrlKey || e.metaKey) {
+                    e.stopPropagation();
+                    toggleNetworkSelection(log, tr);
+                    return;
+                }
+                tr.classList.toggle('expanded');
+            };
+
             tr.innerHTML = `<td>${log.timeStr}</td><td><span class="method-tag" style="background:${getMethodColor(log.method)}">${log.method}</span></td><td><span class="status-tag ${log.status>=400?'error':''}">${log.status||'-'}</span></td><td title="${log.url}">${log.url}</td><td>${log.duration}ms</td>`;
             const trDetail = document.createElement('tr');
             trDetail.className = 'network-details-row';
@@ -272,6 +344,148 @@
                 ${renderDetailSection('Response Body', log.resBody)}
             </div></td>`;
             return { tr, trDetail };
+        }
+
+        function toggleNetworkSelection(log, tr) {
+            if (selectedNetworkLogs.has(log.logId)) {
+                selectedNetworkLogs.delete(log.logId);
+                tr.classList.remove('selected');
+            } else {
+                if (selectedNetworkLogs.size >= 5) return alert('最多支持对比 5 个请求');
+                selectedNetworkLogs.add(log.logId);
+                tr.classList.add('selected');
+            }
+            updateCompareBar();
+        }
+
+        function clearNetworkSelection() {
+            selectedNetworkLogs.clear();
+            document.querySelectorAll('.network-row.selected').forEach(tr => tr.classList.remove('selected'));
+            updateCompareBar();
+        }
+
+        function updateCompareBar() {
+            const bar = document.getElementById('compare-bar');
+            const count = document.getElementById('compare-count');
+            const clearBtn = document.getElementById('clear-selection-btn');
+            
+            if (selectedNetworkLogs.size > 0) {
+                clearBtn.style.display = 'inline-block';
+            } else {
+                clearBtn.style.display = 'none';
+            }
+
+            if (selectedNetworkLogs.size >= 2) {
+                bar.style.display = 'flex';
+                count.innerText = `已选中 ${selectedNetworkLogs.size} 个请求`;
+            } else {
+                bar.style.display = 'none';
+            }
+        }
+
+        function showCompareModal() {
+            const logs = networkLogs.filter(l => selectedNetworkLogs.has(l.logId));
+            const body = document.getElementById('compare-body');
+            document.getElementById('compare-modal').style.display = 'flex';
+            
+            if (logs.length === 0) {
+                body.innerHTML = '<div style="padding:20px; text-align:center; color:#888;">未找到选中的请求数据</div>';
+                return;
+            }
+
+            const filter = {
+                urlParams: document.getElementById('show-url-params').checked,
+                reqHeaders: document.getElementById('show-req-headers').checked,
+                reqBody: document.getElementById('show-req-body').checked,
+                resHeaders: document.getElementById('show-res-headers').checked,
+                resBody: document.getElementById('show-res-body').checked
+            };
+
+            // 提取所有可能的字段
+            const allKeys = new Set();
+            const dataMap = logs.map(l => {
+                const flat = {};
+                // 基础字段永远包含
+                flat["_Info.URL"] = l.url;
+                flat["_Info.Method"] = l.method;
+                flat["_Info.Status"] = l.status;
+                flat["_Info.Duration"] = l.duration + "ms";
+                allKeys.add("_Info.URL"); allKeys.add("_Info.Method"); allKeys.add("_Info.Status"); allKeys.add("_Info.Duration");
+
+                // 解析 URL 参数
+                if (filter.urlParams && l.url.includes('?')) {
+                    try {
+                        const search = l.url.split('?')[1];
+                        const params = new URLSearchParams(search);
+                        for (const [key, value] of params.entries()) {
+                            const path = `URL.Param.${key}`;
+                            flat[path] = value;
+                            allKeys.add(path);
+                        }
+                    } catch (e) { console.error("URL Parse error", e); }
+                }
+
+                const process = (prefix, obj, shouldProcess) => {
+                    if (!shouldProcess || obj === null || obj === undefined) return;
+                    if (typeof obj !== 'object') {
+                        flat[prefix] = obj;
+                        allKeys.add(prefix);
+                        return;
+                    }
+                    Object.entries(obj).forEach(([k, v]) => {
+                        const path = prefix ? `${prefix}.${k}` : k;
+                        if (v !== null && typeof v === 'object') process(path, v, true);
+                        else { flat[path] = v; allKeys.add(path); }
+                    });
+                };
+
+                process('Req.Headers', l.reqHeaders, filter.reqHeaders);
+                process('Req.Body', l.reqBody, filter.reqBody);
+                process('Res.Headers', l.resHeaders, filter.resHeaders);
+                process('Res.Body', l.resBody, filter.resBody);
+                return flat;
+            });
+
+            const sortedKeys = Array.from(allKeys).sort((a, b) => {
+                if (a.startsWith('_') && !b.startsWith('_')) return -1;
+                if (!a.startsWith('_') && b.startsWith('_')) return 1;
+                return a.localeCompare(b);
+            });
+
+            let html = `<table class="compare-table" id="compare-table-el"><thead><tr><th>Key</th>`;
+            logs.forEach(l => html += `<th>${l.method} ${l.timeStr}</th>`);
+            html += `</tr></thead><tbody>`;
+
+            sortedKeys.forEach(key => {
+                const values = dataMap.map(d => d[key]);
+                const isSame = values.every(v => JSON.stringify(v) === JSON.stringify(values[0]));
+                const displayKey = key.startsWith('_Info.') ? key.replace('_Info.', '') : key;
+                
+                html += `<tr class="${isSame ? 'same-row' : 'diff-row'}">
+                    <th style="${key.startsWith('_Info.') ? 'color: var(--accent-color); font-weight:bold;' : ''}">${displayKey}</th>`;
+                
+                values.forEach((v, i) => {
+                    const displayVal = (v === undefined) ? '<span style="color:#666">N/A</span>' : 
+                                      (typeof v === 'string' ? v : JSON.stringify(v));
+                    const isDiff = !isSame && JSON.stringify(v) !== JSON.stringify(values[0]) && i > 0;
+                    html += `<td><span class="${isDiff ? 'diff-tag' : ''}">${displayVal}</span></td>`;
+                });
+                html += `</tr>`;
+            });
+
+            html += `</tbody></table>`;
+            body.innerHTML = html;
+            toggleHideSame(); // 重新应用隐藏相同项的逻辑
+        }
+
+        function toggleHideSame() {
+            const table = document.getElementById('compare-table-el');
+            const hide = document.getElementById('hide-same-toggle').checked;
+            if (table) table.classList.toggle('hide-same', hide);
+        }
+
+        function closeCompareModal() {
+            document.getElementById('compare-modal').style.display = 'none';
         }
 
         function createLogRow(log) {
