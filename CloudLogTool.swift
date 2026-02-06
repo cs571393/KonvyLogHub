@@ -1,0 +1,284 @@
+//
+//  CloudLogTool.swift
+//  Konvy
+//
+//  Created by Gemini on 2026/1/30.
+//  Copyright © 2026 Konvy. All rights reserved.
+//
+
+import UIKit
+import DeviceKit
+import Alamofire
+
+#if DEBUG
+final class CloudLogTool: NSObject, @unchecked Sendable {
+    
+    static let shared = CloudLogTool()
+    
+    /// 查看log的地址： https://konvyloghub.pages.dev
+    
+    /// 部署后的 Cloudflare Worker 地址
+    private let workerUrl = "https://konvyloghub.pages.dev/report"
+    private let authToken = "konvy-debug-2026"
+    
+    internal let deviceName = Device.current.description
+    internal let deviceId = UserDataTool.getUUID() ?? ""
+    internal let os_version = UIDevice.current.systemVersion
+    internal let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    
+    // --- 批量处理相关 ---
+    internal var logBuffer: [[String: Any]] = []
+    internal let lock = NSLock()
+    internal var sendWorkItem: DispatchWorkItem?
+    internal let batchInterval: TimeInterval = 3.0 // 3秒合并一次
+    internal var lastMetadata: [String: Any]? // 记录最后一次发送的 metadata
+    
+    // --- EventMonitor 相关 ---
+    /// EventMonitor 协议要求的队列，明确指定为主线程，确保调试打印可见
+    var queue: DispatchQueue {
+        return .main
+    }
+}
+
+// MARK: - Public Logging Methods
+extension CloudLogTool {
+    
+    /// 发送普通调试日志
+    func log(_ content: Any?, level: String = "info") {
+        guard let safeContent = content else { return }
+        if let str = safeContent as? String, str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        
+        let currentMetadata = getMetadata()
+        var logItem: [String: Any] = [
+            "deviceId": deviceId,
+            "deviceName": deviceName,
+            "level": level,
+            "content": safeContent,
+            "timestamp": Date().timeIntervalSince1970
+        ]
+        
+        if lastMetadata == nil || !NSDictionary(dictionary: currentMetadata).isEqual(to: lastMetadata!) {
+            logItem["metadata"] = currentMetadata
+            lastMetadata = currentMetadata
+        }
+        
+        addToBuffer(logItem)
+    }
+    
+    /// 发送网络日志 (供 Network Tab 使用)
+    func logNetwork(url: String,
+                    method: String,
+                    requestHeaders: [String: Any]?,
+                    requestBody: Any?,
+                    responseHeaders: [String: Any]?,
+                    responseBody: Any?,
+                    statusCode: Int,
+                    duration: Double) {
+        let safeReqBody = processBody(requestBody)
+        let safeResBody = processBody(responseBody)
+        
+        var logItem: [String: Any] = [
+            "deviceId": deviceId,
+            "deviceName": deviceName,
+            "timestamp": Date().timeIntervalSince1970,
+            "type": "network",
+            "method": method.uppercased(),
+            "url": url,
+            "status": statusCode,
+            "duration": Int(duration * 1000),
+            "request": [
+                "headers": requestHeaders ?? [:],
+                "body": safeReqBody ?? ""
+            ],
+            "response": [
+                "headers": responseHeaders ?? [:],
+                "body": safeResBody ?? ""
+            ]
+        ]
+        
+        let currentMetadata = getMetadata()
+        if lastMetadata == nil || !NSDictionary(dictionary: currentMetadata).isEqual(to: lastMetadata!) {
+            logItem["metadata"] = currentMetadata
+            lastMetadata = currentMetadata
+        }
+        
+        addToBuffer(logItem)
+    }
+}
+
+// MARK: - Internal Helpers & Upload Logic
+extension CloudLogTool {
+    
+    /// 获取当前的设备和用户信息
+    private func getMetadata() -> [String: Any] {
+        let userBase = UserDataTool.shared().userInfoModel?.user?.base
+        return [
+            "user_id": userBase?.uid ?? "",
+            "username": userBase?.username ?? "",
+            "fcm_token": CacheTool.shareCacheTool().object(forKey: kFcmToken) as? String ?? "",
+            "imei": deviceId,
+            "deviceName": deviceName,
+            "osVersion": os_version,
+            "appVersion": appVersion
+        ]
+    }
+
+    /// 将日志加入缓冲区并开启定时器
+    private func addToBuffer(_ item: [String: Any]) {
+        lock.lock()
+        logBuffer.append(item)
+        if sendWorkItem == nil {
+            let workItem = DispatchWorkItem { [weak self] in
+                self?.flush()
+            }
+            sendWorkItem = workItem
+            DispatchQueue.global().asyncAfter(deadline: .now() + batchInterval, execute: workItem)
+        }
+        lock.unlock()
+    }
+
+    /// 立即刷新缓冲区
+    private func flush() {
+        lock.lock()
+        let logsToSend = logBuffer
+        logBuffer.removeAll()
+        sendWorkItem = nil
+        lock.unlock()
+        
+        guard !logsToSend.isEmpty else { return }
+        performUpload(logsToSend)
+    }
+
+    private func performUpload(_ logs: [[String: Any]]) {
+        // --- 分片逻辑：Supabase Realtime 限制单条消息 1MiB，我们按 900KB 分片以保安全 ---
+        let maxBatchBytes = 900 * 1024 
+        var currentChunk: [[String: Any]] = []
+        var currentChunkSize = 0
+        
+        for log in logs {
+            // 序列化单条日志以获取准确大小
+            guard let logData = try? JSONSerialization.data(withJSONObject: log, options: []) else {
+                continue
+            }
+            
+            let logSize = logData.count
+            
+            if logSize >= maxBatchBytes {
+                // 如果单条日志就超过了 900KB，记录警告并跳过
+                continue
+            }
+            
+            if currentChunkSize + logSize > maxBatchBytes {
+                // 如果加上这条就超了，先发掉当前的 Chunk
+                sendHttpRequest(currentChunk)
+                // 重置新的 Chunk
+                currentChunk = [log]
+                currentChunkSize = logSize
+            } else {
+                currentChunk.append(log)
+                currentChunkSize += logSize
+            }
+        }
+        
+        // 发送最后一波
+        if !currentChunk.isEmpty {
+            sendHttpRequest(currentChunk)
+        }
+    }
+
+    private func sendHttpRequest(_ logs: [[String: Any]]) {
+        guard let url = URL(string: workerUrl) else { return }
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30.0)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(authToken, forHTTPHeaderField: "Authorization")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: logs, options: [])
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            guard let data = data, error == nil else { return }
+            
+            do {
+                if let json = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                   let commands = json["commands"] as? [[String: Any]] {
+                    for cmdObj in commands {
+                        self?.handleCommand(cmdObj)
+                    }
+                }
+            } catch {
+                print("CloudLogTool: Failed to parse response - \(error.localizedDescription)")
+            }
+        }.resume()
+    }
+
+    private func handleCommand(_ cmdObj: [String: Any]) {
+        let command = cmdObj["command"] as? String
+        let payload = cmdObj["payload"] as? String
+        
+        switch command {
+        case "copy_to_clipboard":
+            DispatchQueue.main.async {
+                if let text = payload {
+                    UIPasteboard.general.string = text
+                    print("CloudLogTool: 📋 Executed command: copy_to_clipboard")
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    /// 处理 Body 数据
+    private func processBody(_ body: Any?) -> Any? {
+        guard let body = body else { return nil }
+        if JSONSerialization.isValidJSONObject(body) { return body }
+        if let data = body as? Data {
+            if data.count > 1024 * 512 { return "[Body too large: \(data.count) bytes]" }
+            if let json = try? JSONSerialization.jsonObject(with: data, options: []), JSONSerialization.isValidJSONObject(json) { return json }
+            return String(data: data, encoding: .utf8) ?? "[Binary Data: \(data.count) bytes]"
+        }
+        return "\(body)"
+    }
+}
+
+// MARK: - Alamofire EventMonitor
+extension CloudLogTool: EventMonitor {
+    
+    /// 只要请求开始，就一定会触发
+    func requestDidResume(_ request: Request) {
+    }
+    
+    /// 请求生命周期的终点 (成功、失败、取消都会走这里)
+    func requestDidFinish(_ request: Request) {
+        let url = request.request?.url?.absoluteString ?? ""
+        
+        let method = request.request?.httpMethod ?? "GET"
+        let statusCode = request.response?.statusCode ?? 0
+        
+        // 统计耗时 (从 metrics 中获取)
+        let duration = request.metrics?.taskInterval.duration ?? 0
+        
+        // 获取 Body 数据
+        let reqBody = request.request?.httpBody
+        
+        // 提取 Response Data
+        var resBody: Data?
+        if let dataRequest = request as? DataRequest {
+            resBody = dataRequest.data
+        } else if let downloadRequest = request as? DownloadRequest {
+            resBody = downloadRequest.resumeData
+        }
+        
+        // 调用上报
+        self.logNetwork(
+            url: url,
+            method: method,
+            requestHeaders: request.request?.allHTTPHeaderFields,
+            requestBody: reqBody,
+            responseHeaders: request.response?.allHeaderFields as? [String: Any],
+            responseBody: resBody,
+            statusCode: statusCode,
+            duration: duration
+        )
+    }
+}
+#endif

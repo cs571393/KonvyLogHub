@@ -30,6 +30,7 @@ object CloudLogTool {
         .connectTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private var appContext: Context? = null // 用于执行系统操作
     private val logBuffer = mutableListOf<JSONObject>()
     private val handler = Handler(Looper.getMainLooper())
     private var lastMetadata: JSONObject? = null
@@ -40,6 +41,7 @@ object CloudLogTool {
      */
     fun log(context: Context, content: Any?, level: String = "info") {
         if (content == null) return
+        this.appContext = context.applicationContext
         val logItem = createBaseLog(context, level)
         logItem.put("content", content)
 
@@ -61,6 +63,7 @@ object CloudLogTool {
         statusCode: Int,
         durationMs: Long
     ) {
+        this.appContext = context.applicationContext
         val logItem = createBaseLog(context, "info")
         logItem.put("type", "network") // 核心字段
         logItem.put("method", method.uppercase())
@@ -69,13 +72,11 @@ object CloudLogTool {
         logItem.put("duration", durationMs)
 
         val reqObj = JSONObject().apply {
-            put("headers", JSONObject(requestHeaders ?: emptyMap<String,
-String>()))
+            put("headers", JSONObject(requestHeaders ?: emptyMap<String, String>()))
             put("body", processBody(requestBody))
         }
         val resObj = JSONObject().apply {
-            put("headers", JSONObject(responseHeaders ?: emptyMap<String,
-String>()))
+            put("headers", JSONObject(responseHeaders ?: emptyMap<String, String>()))
             put("body", processBody(responseBody))
         }
 
@@ -167,8 +168,7 @@ skipping.")
     private fun sendHttpRequest(jsonString: String) {
         val request = Request.Builder()
             .url(WORKER_URL)
-
-.post(jsonString.toRequestBody("application/json".toMediaType()))
+            .post(jsonString.toRequestBody("application/json".toMediaType()))
             .addHeader("Authorization", AUTH_TOKEN)
             .build()
 
@@ -177,9 +177,45 @@ skipping.")
                 Log.e(TAG, "☁️ CloudLog Error: ${e.message}")
             }
             override fun onResponse(call: Call, response: Response) {
+                if (response.isSuccessful) {
+                    val bodyStr = response.body?.string()
+                    if (!bodyStr.isNullOrEmpty()) {
+                        try {
+                            val json = JSONObject(bodyStr)
+                            val commands = json.optJSONArray("commands")
+                            if (commands != null && commands.length() > 0) {
+                                for (i in 0 until commands.length()) {
+                                    handleCommand(commands.getJSONObject(i))
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse command response: ${e.message}")
+                        }
+                    }
+                }
                 response.close()
             }
         })
+    }
+
+    private fun handleCommand(cmdObj: JSONObject) {
+        val command = cmdObj.optString("command")
+        val payload = cmdObj.optString("payload")
+
+        when (command) {
+            "copy_to_clipboard" -> {
+                handler.post {
+                    try {
+                        val clipboard = appContext?.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("KonvyLogHub", payload)
+                        clipboard?.setPrimaryClip(clip)
+                        Log.i(TAG, "📋 Executed command: copy_to_clipboard")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to copy to clipboard: ${e.message}")
+                    }
+                }
+            }
+        }
     }
 
     private fun processBody(body: Any?): Any {

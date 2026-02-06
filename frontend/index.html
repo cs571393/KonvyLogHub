@@ -35,11 +35,16 @@
         .device-group.expanded .chevron { transform: rotate(90deg); }
         .device-details { display: none; background: #1a1a1b; padding: 10px 15px; font-size: 11px; border-top: 1px solid #333; }
         .device-group.expanded .device-details { display: block; }
-        .info-row { display: flex; padding: 6px 0; border-bottom: 1px solid #252526; }
+        .info-row { display: flex; padding: 6px 0; border-bottom: 1px solid #252526; align-items: center; }
         .info-key { width: 85px; color: #858585; flex-shrink: 0; }
-        .info-val { color: #ce9178; word-break: break-all; flex: 1; }
-        .copy-btn { color: var(--accent-color); cursor: pointer; font-size: 10px; }
+        .info-val { color: #ce9178; word-break: break-all; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+        .copy-btn { color: var(--accent-color); cursor: pointer; font-size: 10px; margin-left: 5px; flex-shrink: 0; }
         .copy-btn:hover { text-decoration: underline; }
+        
+        .command-zone { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #333; }
+        .command-input { width: 100%; background: #111; border: 1px solid #444; color: #d4d4d4; padding: 5px; font-size: 11px; border-radius: 3px; box-sizing: border-box; margin-bottom: 5px; }
+        .command-btn { width: 100%; background: var(--accent-color); color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer; font-size: 11px; }
+        .command-btn:hover { background: #005a9e; }
         
         .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
         .tabs { display: flex; background: #2d2d2d; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
@@ -456,12 +461,65 @@
                 const group = document.createElement('div');
                 group.className = `device-group ${currentDeviceId===id?'expanded':''}`;
                 let detailsHtml = '<div class="device-details">';
-                fields.forEach(f => { if(f.v) detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val">${f.v} <span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div></div>`; });
+                fields.forEach(f => { if(f.v) detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val" title="${f.v}">${f.v}</div><span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div>`; });
                 detailsHtml += '</div>';
-                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice('${id}')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${displayName}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div>${detailsHtml}`;
+                
+                // 增加下发剪贴板指令区域
+                detailsHtml += `
+                    <div class="command-zone">
+                        <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${id}">
+                        <button class="command-btn" onclick="sendToClipboard('${id}', event)">发送到设备剪贴板</button>
+                    </div>
+                `;
+
+                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice('${id}')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${displayName}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div><div class="device-details">${detailsHtml}</div>`;
                 list.appendChild(group);
             });
         }
+
+        async function sendToClipboard(deviceId, event) {
+            event.stopPropagation();
+            const input = document.getElementById(`cmd-${deviceId}`);
+            const text = input.value.trim();
+            if (!text) return alert('请输入文本');
+
+            const btn = event.target;
+            const oldText = btn.innerText;
+            btn.innerText = '发送中...';
+            btn.disabled = true;
+
+            try {
+                // 利用 report 接口的特殊 action 下发指令
+                const res = await fetch('/report?action=push_command', {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Authorization': 'konvy-debug-2026' // 与环境配置一致
+                    },
+                    body: JSON.stringify({
+                        deviceId: deviceId,
+                        command: 'copy_to_clipboard',
+                        payload: text
+                    })
+                });
+
+                if (res.ok) {
+                    btn.innerText = '✅ 已排队 (待手机抓取)';
+                    input.value = '';
+                } else {
+                    btn.innerText = '❌ 发送失败';
+                }
+            } catch (e) {
+                console.error(e);
+                btn.innerText = '❌ 错误';
+            } finally {
+                setTimeout(() => {
+                    btn.innerText = oldText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
         function selectDevice(id) { currentDeviceId = (currentDeviceId===id && id!=='all') ? 'all' : id; updateDeviceList(); currentTab === 'logs' ? refreshDisplay() : refreshNetworkDisplay(); }
         function copyText(t, e) { e.stopPropagation(); navigator.clipboard.writeText(t).then(() => alert('已复制')); }
         function toggleSort() { sortDesc = !sortDesc; document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑"; refreshDisplay(); }
