@@ -227,7 +227,13 @@
             </div>
             <div id="view-socket" class="view-content" style="display:none">
                 <div class="toolbar">
-                    <input type="text" id="socketSearchInput" placeholder="搜索 Action/内容..." style="width: 180px;" oninput="refreshSocketDisplay()">
+                    <input type="text" id="socketSearchInput" placeholder="搜索 Action/内容..." style="width: 180px;" 
+                        oninput="refreshSocketDisplay()" onkeydown="if(event.key==='Enter') navSocketSearch(1)">
+                    <div class="json-search-container" id="socket-search-nav" style="display:none; margin-left: 10px;">
+                        <button class="nav-btn" onclick="navSocketSearch(-1)">◀</button>
+                        <button class="nav-btn" onclick="navSocketSearch(1)">▶</button>
+                        <span id="socket-search-count" style="font-size:10px; color:#666; margin-left: 5px;">0/0</span>
+                    </div>
                     <div style="flex:1"></div>
                     <span style="font-size:11px; color: #858585" id="socket-count">0 messages</span>
                 </div>
@@ -563,7 +569,8 @@
             
             // 使用 JSON 树渲染逻辑
             const isPingPong = log.action === 'PING' || log.action === 'PONG';
-            const contentHtml = (log.content && typeof log.content === 'object') 
+            const isObject = log.content && typeof log.content === 'object';
+            const contentHtml = isObject 
                 ? formatJsonView(log.content) 
                 : `<span class="json-string">${log.content}</span>`;
 
@@ -571,8 +578,25 @@
                 <span class="time">${log.timeStr}</span>
                 <span class="tag" style="background:${color}">${log.action}</span>
                 <span class="device-name-tag">[${log.name}]</span>
+                <span class="copy-btn" id="copy-socket-btn">[复制]</span>
+                ${isObject ? `
+                    <span class="copy-btn" style="color: #858585" id="expand-socket-btn">[展开]</span>
+                    <span class="copy-btn" style="color: #858585" id="collapse-socket-btn">[收起]</span>
+                ` : ''}
             </div>
             <div class="log-content" style="color: ${isPingPong ? '#666' : '#ce9178'}" onmouseover="handleSocketHover(event)">${contentHtml}</div>`;
+            
+            const copyBtn = div.querySelector('#copy-socket-btn');
+            copyBtn.onclick = () => {
+                const text = isObject ? JSON.stringify(log.content, null, 2) : String(log.content);
+                copyRaw(copyBtn, text);
+            };
+
+            if (isObject) {
+                div.querySelector('#expand-socket-btn').onclick = () => div.querySelectorAll('details').forEach(d => d.open = true);
+                div.querySelector('#collapse-socket-btn').onclick = () => div.querySelectorAll('details').forEach(d => d.open = false);
+            }
+
             return div;
         }
 
@@ -608,6 +632,82 @@
             logs.sort((a, b) => sortDesc ? b.ts - a.ts : a.ts - b.ts);
             logs.forEach(log => list.appendChild(createSocketRow(log)));
             updateSocketCount();
+            
+            // 列表渲染后应用高亮
+            if (term && term.length >= 2) {
+                applySocketHighlights(term);
+            } else {
+                document.getElementById('socket-search-nav').style.display = 'none';
+            }
+        }
+
+        let socketSearchMatches = [];
+        let socketSearchIndex = -1;
+
+        function applySocketHighlights(term) {
+            const list = document.getElementById('socket-list');
+            const nav = document.getElementById('socket-search-nav');
+            const countSpan = document.getElementById('socket-search-count');
+            
+            socketSearchMatches = [];
+            socketSearchIndex = -1;
+
+            // 深度遍历文本节点
+            const walker = document.createTreeWalker(list, NodeFilter.SHOW_TEXT, null, false);
+            const nodes = [];
+            while(walker.nextNode()) nodes.push(walker.currentNode);
+
+            nodes.forEach(node => {
+                let textNode = node;
+                while (true) {
+                    const content = textNode.nodeValue;
+                    const idx = content.toLowerCase().indexOf(term);
+                    if (idx === -1) break;
+
+                    const span = document.createElement('span');
+                    span.className = 'search-match';
+                    const middle = textNode.splitText(idx);
+                    textNode = middle.splitText(term.length);
+                    span.appendChild(middle.cloneNode(true));
+                    middle.parentNode.replaceChild(span, middle);
+                    socketSearchMatches.push(span);
+                }
+            });
+
+            if (socketSearchMatches.length > 0) {
+                nav.style.display = 'flex';
+                socketSearchIndex = 0;
+                updateSocketSearchNav();
+                jumpToSocketMatch(0);
+            } else {
+                nav.style.display = 'none';
+            }
+        }
+
+        function navSocketSearch(dir) {
+            if (socketSearchMatches.length === 0) return;
+            socketSearchMatches[socketSearchIndex].classList.remove('current');
+            socketSearchIndex = (socketSearchIndex + dir + socketSearchMatches.length) % socketSearchMatches.length;
+            updateSocketSearchNav();
+            jumpToSocketMatch(socketSearchIndex);
+        }
+
+        function updateSocketSearchNav() {
+            document.getElementById('socket-search-count').innerText = `${socketSearchIndex + 1}/${socketSearchMatches.length}`;
+        }
+
+        function jumpToSocketMatch(index) {
+            const el = socketSearchMatches[index];
+            el.classList.add('current');
+            
+            // 自动展开父级 JSON 节点
+            let p = el.parentElement;
+            while(p && p !== document.getElementById('socket-list')) {
+                if (p.tagName === 'DETAILS') p.open = true;
+                p = p.parentElement;
+            }
+            
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         function refreshNetworkDisplay() {

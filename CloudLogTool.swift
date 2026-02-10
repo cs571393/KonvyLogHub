@@ -23,7 +23,9 @@ final class CloudLogTool: NSObject, @unchecked Sendable {
     
     // --- 内部网络会话 (用于跳过 TLS 校验) ---
     private lazy var session: URLSession = {
-        let config = URLSessionConfiguration.default
+        let config = URLSessionConfiguration.ephemeral // 使用 ephemeral 避免缓存旧网络的 SSL 状态
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 30
         return URLSession(configuration: config, delegate: TLSHandler(), delegateQueue: nil)
     }()
 
@@ -211,10 +213,11 @@ extension CloudLogTool {
     private func sendHttpRequest(_ logs: [[String: Any]]) {
         guard let url = URL(string: workerUrl) else { return }
         
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30.0)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 30.0)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(authToken, forHTTPHeaderField: "Authorization")
+        request.setValue("close", forHTTPHeaderField: "Connection") // 强制关闭连接，避免旧网络的连接复用
         
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: logs, options: [])
@@ -270,8 +273,16 @@ extension CloudLogTool {
 // MARK: - TLS Handler (Ignore SSL errors in DEBUG)
 #if DEBUG
 final class TLSHandler: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+    
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        handle(challenge, completionHandler: completionHandler)
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        // 在开发环境下忽略所有 TLS/SSL 证书错误
+        handle(challenge, completionHandler: completionHandler)
+    }
+    
+    private func handle(_ challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
             if let trust = challenge.protectionSpace.serverTrust {
                 completionHandler(.useCredential, URLCredential(trust: trust))
