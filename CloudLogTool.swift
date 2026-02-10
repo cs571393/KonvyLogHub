@@ -21,6 +21,12 @@ final class CloudLogTool: NSObject, @unchecked Sendable {
     private let workerUrl = "https://konvyloghub.pages.dev/report"
     private let authToken = "konvy-debug-2026"
     
+    // --- 内部网络会话 (用于跳过 TLS 校验) ---
+    private lazy var session: URLSession = {
+        let config = URLSessionConfiguration.default
+        return URLSession(configuration: config, delegate: TLSHandler(), delegateQueue: nil)
+    }()
+
     internal let deviceName = Device.current.description
     internal let deviceId = UserDataTool.getUUID() ?? ""
     internal let os_version = UIDevice.current.systemVersion
@@ -46,6 +52,7 @@ extension CloudLogTool {
     /// 发送普通调试日志
     func log(_ content: Any?, level: String = "info") {
         guard let safeContent = content else { return }
+        
         if let str = safeContent as? String, str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
         
         let currentMetadata = getMetadata()
@@ -57,6 +64,27 @@ extension CloudLogTool {
             "timestamp": Date().timeIntervalSince1970
         ]
         
+        if lastMetadata == nil || !NSDictionary(dictionary: currentMetadata).isEqual(to: lastMetadata!) {
+            logItem["metadata"] = currentMetadata
+            lastMetadata = currentMetadata
+        }
+        
+        addToBuffer(logItem)
+    }
+
+    /// 发送 Socket 日志
+    func logSocket(action: String, content: Any?) {
+        var logItem: [String: Any] = [
+            "deviceId": deviceId,
+            "deviceName": deviceName,
+            "timestamp": Date().timeIntervalSince1970,
+            "type": "socket",
+            "level": "socket", // 方便在日志列表过滤
+            "action": action,
+            "content": content ?? ""
+        ]
+        
+        let currentMetadata = getMetadata()
         if lastMetadata == nil || !NSDictionary(dictionary: currentMetadata).isEqual(to: lastMetadata!) {
             logItem["metadata"] = currentMetadata
             lastMetadata = currentMetadata
@@ -150,28 +178,23 @@ extension CloudLogTool {
     }
 
     private func performUpload(_ logs: [[String: Any]]) {
-        // --- 分片逻辑：Supabase Realtime 限制单条消息 1MiB，我们按 900KB 分片以保安全 ---
         let maxBatchBytes = 900 * 1024 
         var currentChunk: [[String: Any]] = []
         var currentChunkSize = 0
         
         for log in logs {
-            // 序列化单条日志以获取准确大小
+            // 检查序列化
             guard let logData = try? JSONSerialization.data(withJSONObject: log, options: []) else {
                 continue
             }
             
             let logSize = logData.count
-            
             if logSize >= maxBatchBytes {
-                // 如果单条日志就超过了 900KB，记录警告并跳过
                 continue
             }
             
             if currentChunkSize + logSize > maxBatchBytes {
-                // 如果加上这条就超了，先发掉当前的 Chunk
                 sendHttpRequest(currentChunk)
-                // 重置新的 Chunk
                 currentChunk = [log]
                 currentChunkSize = logSize
             } else {
@@ -180,7 +203,6 @@ extension CloudLogTool {
             }
         }
         
-        // 发送最后一波
         if !currentChunk.isEmpty {
             sendHttpRequest(currentChunk)
         }
@@ -188,13 +210,19 @@ extension CloudLogTool {
 
     private func sendHttpRequest(_ logs: [[String: Any]]) {
         guard let url = URL(string: workerUrl) else { return }
+        
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30.0)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(authToken, forHTTPHeaderField: "Authorization")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: logs, options: [])
         
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: logs, options: [])
+        } catch {
+            return
+        }
+        
+        session.dataTask(with: request) { [weak self] data, response, error in
             guard let data = data, error == nil else { return }
             
             do {
@@ -205,7 +233,7 @@ extension CloudLogTool {
                     }
                 }
             } catch {
-                print("CloudLogTool: Failed to parse response - \(error.localizedDescription)")
+                // 解析失败不打印
             }
         }.resume()
     }
@@ -219,7 +247,6 @@ extension CloudLogTool {
             DispatchQueue.main.async {
                 if let text = payload {
                     UIPasteboard.general.string = text
-                    print("CloudLogTool: 📋 Executed command: copy_to_clipboard")
                 }
             }
         default:
@@ -239,6 +266,22 @@ extension CloudLogTool {
         return "\(body)"
     }
 }
+
+// MARK: - TLS Handler (Ignore SSL errors in DEBUG)
+#if DEBUG
+final class TLSHandler: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        // 在开发环境下忽略所有 TLS/SSL 证书错误
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            if let trust = challenge.protectionSpace.serverTrust {
+                completionHandler(.useCredential, URLCredential(trust: trust))
+                return
+            }
+        }
+        completionHandler(.performDefaultHandling, nil)
+    }
+}
+#endif
 
 // MARK: - Alamofire EventMonitor
 extension CloudLogTool: EventMonitor {

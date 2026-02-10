@@ -15,6 +15,7 @@
             --log-info: #6a9955;
             --log-warn: #d7ba7d;
             --log-error: #f48771;
+            --log-socket: #b267e6;
             --method-get: #61affe;
             --method-post: #49cc90;
             --method-put: #fca130;
@@ -185,6 +186,7 @@
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('logs')" id="tab-logs">日志 (Logs)</div>
                 <div class="tab" onclick="switchTab('network')" id="tab-network">网络 (Network)</div>
+                <div class="tab" onclick="switchTab('socket')" id="tab-socket">Socket</div>
             </div>
             <div id="view-logs" class="view-content">
                 <div class="toolbar">
@@ -223,6 +225,14 @@
                     </table>
                 </div>
             </div>
+            <div id="view-socket" class="view-content" style="display:none">
+                <div class="toolbar">
+                    <input type="text" id="socketSearchInput" placeholder="搜索 Action/内容..." style="width: 180px;" oninput="refreshSocketDisplay()">
+                    <div style="flex:1"></div>
+                    <span style="font-size:11px; color: #858585" id="socket-count">0 messages</span>
+                </div>
+                <div class="log-container"><div id="socket-list"></div></div>
+            </div>
         </div>
     </div>
 
@@ -230,10 +240,11 @@
         const SUPABASE_URL = 'https://dehcpksgjhyvoyccafnj.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRlaGNwa3Nnamh5dm95Y2NhZm5qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NzU5MzAsImV4cCI6MjA4NTU1MTkzMH0.f51lBltot16OF2HmifWqUdl4sOe1SOO7f4c5k5rMAqg';
         const REPORT_API = 'https://konvyloghub.pages.dev/report';
-        let currentDeviceId = 'all';
+        let currentDeviceId = localStorage.getItem('last_selected_device') || null;
         let sortDesc = true;
         let allLogs = [];
         let networkLogs = [];
+        let socketLogs = [];
         let currentTab = 'logs';
         const observedLevels = new Set();
         let devices = new Map();
@@ -254,6 +265,8 @@
             const parsed = payload.data || payload; 
             const items = Array.isArray(parsed) ? parsed : [parsed];
             items.forEach(item => { const log = processItem(item); if (log) appendToUI(log); });
+            // 每次收到新设备数据时，可能需要刷新设备列表（如果是新设备或从无到有）
+            updateDeviceList();
         }).subscribe(s => { document.getElementById('status').innerText = 'Status: ' + s; });
 
         function processItem(log) {
@@ -265,6 +278,11 @@
                 updateDeviceList();
             }
             let processed;
+            // 更加宽松的 Socket 日志识别逻辑
+            const isSocket = log.type === 'socket' || 
+                             (log.level && log.level.toString().toLowerCase() === 'socket') ||
+                             (log.action && !log.method); // 如果有 action 但没有 method，通常是 socket
+            
             if (log.type === 'network') {
                 processed = { 
                     id: dId, 
@@ -284,6 +302,27 @@
                 };
                 networkLogs.push(processed);
                 if (networkLogs.length > 1000) networkLogs.shift();
+            } else if (isSocket) {
+                processed = {
+                    id: dId,
+                    name: dName,
+                    action: (log.action || 'SOCKET').toString().toUpperCase(),
+                    content: log.content || '',
+                    ts: log.timestamp ? log.timestamp * 1000 : Date.now(),
+                    timeStr: formatTime(log.timestamp ? log.timestamp * 1000 : Date.now()),
+                    type: 'socket'
+                };
+                socketLogs.push(processed);
+                if (socketLogs.length > 2000) socketLogs.shift();
+                
+                // 【额外增强】同时也存入普通日志队列，确保万一 Socket Tab 挂了，Logs 里也能搜到
+                const fallbackLog = { 
+                    id: dId, name: dName, level: 'socket', 
+                    content: `[Socket:${processed.action}] ${typeof processed.content === 'object' ? JSON.stringify(processed.content) : processed.content}`, 
+                    ts: processed.ts, timeStr: processed.timeStr, type: 'log' 
+                };
+                allLogs.push(fallbackLog);
+                if (allLogs.length > 3000) allLogs.shift();
             } else {
                 const level = (log.level || 'info').toLowerCase();
                 if (!observedLevels.has(level)) { observedLevels.add(level); updateLevelFilter(); }
@@ -305,6 +344,16 @@
                     if (sortDesc) { list.insertBefore(trDetail, list.firstChild); list.insertBefore(tr, list.firstChild); }
                     else { list.appendChild(tr); list.appendChild(trDetail); }
                     updateNetworkCount();
+                }
+            } else if (log.type === 'socket') {
+                const list = document.getElementById('socket-list');
+                const term = document.getElementById('socketSearchInput').value.toLowerCase();
+                const matchDevice = (currentDeviceId === 'all' || log.id === currentDeviceId);
+                const matchSearch = !term || log.action.toLowerCase().includes(term) || JSON.stringify(log.content).toLowerCase().includes(term);
+                if (matchDevice && matchSearch) {
+                    const div = createSocketRow(log);
+                    if (sortDesc) list.insertBefore(div, list.firstChild); else list.appendChild(div);
+                    updateSocketCount();
                 }
             } else {
                 const list = document.getElementById('log-list');
@@ -498,6 +547,43 @@
             return div;
         }
 
+        function createSocketRow(log) {
+            const div = document.createElement('div'); div.className = 'log-entry';
+            const actionColors = {
+                'SEND': '#49cc90', 
+                'RECEIVED': '#61affe', 
+                'CONNECTED': '#6a9955', 
+                'DISCONNECTED': '#f48771',
+                'ERROR': '#f48771',
+                'PING': '#555',
+                'PONG': '#555'
+            };
+            const color = actionColors[log.action] || '#b267e6';
+            div.style.borderLeftColor = color;
+            
+            // 使用 JSON 树渲染逻辑
+            const isPingPong = log.action === 'PING' || log.action === 'PONG';
+            const contentHtml = (log.content && typeof log.content === 'object') 
+                ? formatJsonView(log.content) 
+                : `<span class="json-string">${log.content}</span>`;
+
+            div.innerHTML = `<div class="log-info-meta">
+                <span class="time">${log.timeStr}</span>
+                <span class="tag" style="background:${color}">${log.action}</span>
+                <span class="device-name-tag">[${log.name}]</span>
+            </div>
+            <div class="log-content" style="color: ${isPingPong ? '#666' : '#ce9178'}" onmouseover="handleSocketHover(event)">${contentHtml}</div>`;
+            return div;
+        }
+
+        // Socket 悬停时不显示 Path（因为没有面包屑栏），但保留逻辑扩展性
+        function handleSocketHover(e) { }
+
+        function updateSocketCount() {
+            const count = document.getElementById('socket-list').querySelectorAll('.log-entry').length;
+            document.getElementById('socket-count').innerText = `${count} messages`;
+        }
+
         function updateNetworkCount() {
             const count = document.getElementById('network-list').querySelectorAll('.network-row').length;
             document.getElementById('network-count').innerText = `${count} requests`;
@@ -508,7 +594,20 @@
             document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-'+tab));
             document.getElementById('view-logs').style.display = tab === 'logs' ? 'flex' : 'none';
             document.getElementById('view-network').style.display = tab === 'network' ? 'flex' : 'none';
-            tab === 'logs' ? refreshDisplay() : refreshNetworkDisplay();
+            document.getElementById('view-socket').style.display = tab === 'socket' ? 'flex' : 'none';
+            
+            if (tab === 'logs') refreshDisplay();
+            else if (tab === 'network') refreshNetworkDisplay();
+            else if (tab === 'socket') refreshSocketDisplay();
+        }
+
+        function refreshSocketDisplay() {
+            const list = document.getElementById('socket-list'); list.innerHTML = '';
+            const term = document.getElementById('socketSearchInput').value.toLowerCase();
+            let logs = socketLogs.filter(l => (currentDeviceId === 'all' || l.id === currentDeviceId) && (!term || l.action.toLowerCase().includes(term) || JSON.stringify(l.content).toLowerCase().includes(term)));
+            logs.sort((a, b) => sortDesc ? b.ts - a.ts : a.ts - b.ts);
+            logs.forEach(log => list.appendChild(createSocketRow(log)));
+            updateSocketCount();
         }
 
         function refreshNetworkDisplay() {
@@ -668,8 +767,33 @@
         }
         function updateDeviceList() {
             const list = document.getElementById('device-list');
-            list.innerHTML = `<div class="device-group ${currentDeviceId==='all'?'expanded':''}" id="group-all"><div class="device-item ${currentDeviceId==='all'?'active' :''}" onclick="selectDevice('all')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#4caf50;border-radius:50%;margin-right:10px"></div><span>全部设备</span></div></div></div>`;
+            list.innerHTML = '';
+            
+            // 获取当前有数据的设备 ID 集合
+            const activeIds = new Set([
+                ...allLogs.map(l => l.id),
+                ...networkLogs.map(l => l.id),
+                ...socketLogs.map(l => l.id)
+            ]);
+
+            let visibleDevices = [];
             devices.forEach((data, id) => {
+                if (activeIds.has(id)) {
+                    visibleDevices.push({ id, ...data });
+                }
+            });
+
+            // 如果当前没选中设备，或者选中的设备已经没数据了，自动选中第一个
+            if (visibleDevices.length > 0) {
+                const stillExists = visibleDevices.some(d => d.id === currentDeviceId);
+                if (!currentDeviceId || !stillExists) {
+                    currentDeviceId = visibleDevices[0].id;
+                    localStorage.setItem('last_selected_device', currentDeviceId);
+                }
+            }
+
+            visibleDevices.forEach((data) => {
+                const id = data.id;
                 const meta = data.metadata || {};
                 const fields = [{k:'UID',v:meta.user_id},{k:'User',v:meta.username},{k:'Version',v:meta.appVersion},{k:'OS',v:meta.osVersion},{k:'IMEI',v:meta.imei},{k:'FCM',v:meta.fcm_token},{k:'Copy',v:meta.copyText}];
                 const displayName = meta.username ? `${data.name} (${meta.username})` : data.name;
@@ -679,7 +803,6 @@
                 fields.forEach(f => { if(f.v) detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val" title="${f.v}">${f.v}</div><span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div>`; });
                 detailsHtml += '</div>';
                 
-                // 增加下发剪贴板指令区域
                 detailsHtml += `
                     <div class="command-zone">
                         <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${id}">
@@ -735,10 +858,21 @@
             }
         }
 
-        function selectDevice(id) { currentDeviceId = (currentDeviceId===id && id!=='all') ? 'all' : id; updateDeviceList(); currentTab === 'logs' ? refreshDisplay() : refreshNetworkDisplay(); }
+        function selectDevice(id) { 
+            currentDeviceId = id; 
+            localStorage.setItem('last_selected_device', id);
+            updateDeviceList(); 
+            if (currentTab === 'logs') refreshDisplay();
+            else if (currentTab === 'network') refreshNetworkDisplay();
+            else if (currentTab === 'socket') refreshSocketDisplay();
+        }
         function copyText(t, e) { e.stopPropagation(); navigator.clipboard.writeText(t).then(() => alert('已复制')); }
-        function toggleSort() { sortDesc = !sortDesc; document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑"; refreshDisplay(); }
-        function clearLogs() { allLogs=[]; networkLogs=[]; currentTab==='logs'?refreshDisplay():refreshNetworkDisplay(); }
+        function toggleSort() { sortDesc = !sortDesc; document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑"; refreshDisplay(); if(currentTab==='socket') refreshSocketDisplay(); }
+        function clearLogs() { 
+            allLogs=[]; networkLogs=[]; socketLogs=[]; 
+            updateDeviceList(); // 清空后重新计算可见设备
+            currentTab==='logs'?refreshDisplay():(currentTab==='network'?refreshNetworkDisplay():refreshSocketDisplay()); 
+        }
         function resetDevices() { if(confirm("确定重置？")) { localStorage.removeItem('konvy_devices'); devices=new Map(); updateDeviceList(); } }
         document.getElementById('searchInput').oninput = () => refreshDisplay();
         document.getElementById('networkSearchInput').oninput = () => refreshNetworkDisplay();
