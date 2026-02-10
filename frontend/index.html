@@ -77,11 +77,12 @@
         /* Network Table */
         .network-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
         .network-table th { text-align: left; padding: 10px 8px; background: #252526; color: #858585; position: sticky; top: 0; z-index: 10; border-bottom: 1px solid var(--border-color); }
-        .network-table td { padding: 10px 8px; border-bottom: 1px solid #2d2d2d; color: #d4d4d4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .network-table td { padding: 10px 8px; border-bottom: 1px solid #2d2d2d; color: #d4d4d4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; word-break: break-all; }
         .network-row { cursor: pointer; transition: background 0.1s; }
         .network-row:hover { background: #2a2d2e; }
         .network-row.expanded { background: #37373d; }
-        .network-row.expanded td { white-space: normal; word-break: break-all; }
+        .network-row td { white-space: nowrap; }
+        .network-row.expanded td { white-space: normal; }
         .method-tag { font-weight: bold; font-size: 10px; padding: 2px 5px; border-radius: 3px; color: #fff; display: inline-block; width: 45px; text-align: center; }
         .status-tag { color: var(--status-ok); font-weight: bold; }
         .status-tag.error { color: var(--status-error); }
@@ -144,9 +145,73 @@
         .compare-table tr.same-row { display: table-row; }
         .compare-table.hide-same tr.same-row { display: none; }
         .diff-tag { background: #4b1111; padding: 2px 4px; border-radius: 2px; }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            .container { flex-direction: column; }
+            .sidebar { 
+                position: fixed; 
+                left: -320px; 
+                top: 0; 
+                bottom: 0; 
+                z-index: 3000; 
+                transition: left 0.3s; 
+                box-shadow: 5px 0 15px rgba(0,0,0,0.5);
+            }
+            .sidebar.show { left: 0; }
+            .mobile-menu-btn { 
+                display: block !important; 
+                background: var(--sidebar-bg); 
+                color: var(--text-color); 
+                border: none; 
+                padding: 10px; 
+                cursor: pointer;
+                border-bottom: 1px solid var(--border-color);
+            }
+            .main { width: 100%; height: 100vh; display: flex; flex-direction: column; }
+            .view-content { flex: 1; min-height: 0; overflow: hidden; }
+            .log-container { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+            .tabs { overflow-x: auto; white-space: nowrap; }
+            .tab { padding: 10px 15px; flex-shrink: 0; }
+            .toolbar { flex-wrap: wrap; height: auto; padding: 10px; gap: 8px; }
+            .toolbar { flex-wrap: wrap; height: auto; padding: 10px; gap: 8px; }
+            .toolbar input, .toolbar select { flex: 1; min-width: 120px; }
+            .network-table, .network-table thead, .network-table tbody, .network-table tr, .network-table th, .network-table td { 
+                display: block; width: 100%; box-sizing: border-box; 
+            }
+            .network-table thead { display: none; }
+            .network-row { 
+                padding: 12px; border-bottom: 1px solid #333; cursor: pointer; 
+                display: flex !important; flex-wrap: wrap; gap: 8px; align-items: center;
+                position: relative; z-index: 10;
+            }
+            .network-row td { 
+                display: inline-block !important; width: auto !important; padding: 0 !important; 
+                border: none !important; white-space: normal !important; word-break: break-all !important; 
+            }
+            .network-row td:nth-child(4) { width: 100% !important; order: 10; color: #ce9178; font-size: 11px; margin-top: 4px; }
+            .network-details-row { display: none; }
+            .network-row.expanded + .network-details-row { display: block; border-bottom: 2px solid var(--accent-color); }
+            .network-row.expanded + .network-details-row .network-details { display: block; }
+            .detail-content { max-height: 350px !important; }
+            .json-breadcrumb { position: relative; top: 0; z-index: 5; }
+            .log-entry { font-size: 11px; padding: 6px; }
+            .log-info-meta { flex-direction: column; align-items: flex-start; gap: 2px; }
+            .modal-content { width: 100%; height: 100%; border-radius: 0; }
+            .compare-table th { width: 80px; font-size: 10px; }
+            .compare-bar { left: 10px; right: 10px; bottom: 10px; border-radius: 8px; justify-content: center; }
+        }
+        .mobile-menu-btn { display: none; }
+        .sidebar-overlay { 
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0; 
+            background: rgba(0,0,0,0.5); z-index: 2999; display: none; 
+        }
+        .sidebar-overlay.show { display: block; }
     </style>
 </head>
 <body>
+    <button class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰ 选择设备 / 菜单</button>
+    <div id="sidebar-overlay" class="sidebar-overlay" onclick="toggleMobileSidebar()"></div>
     <div id="compare-bar" class="compare-bar" onclick="showCompareModal()">
         <span id="compare-count">已选中 0 个请求</span>
         <strong>开始对比</strong>
@@ -378,6 +443,7 @@
         function createNetworkRow(log) {
             const tr = document.createElement('tr');
             tr.className = 'network-row';
+            tr.style.pointerEvents = 'auto'; // 确保移动端点击事件有效
             if (selectedNetworkLogs.has(log.logId)) tr.classList.add('selected');
             
             tr.onclick = (e) => {
@@ -386,7 +452,15 @@
                     toggleNetworkSelection(log, tr);
                     return;
                 }
+                const isExpanding = !tr.classList.contains('expanded');
                 tr.classList.toggle('expanded');
+                
+                // 移动端点击展开后，自动滚动到该行顶部，确保详情可见
+                if (isExpanding && window.innerWidth <= 768) {
+                    setTimeout(() => {
+                        tr.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }, 100);
+                }
             };
 
             tr.innerHTML = `<td>${log.timeStr}</td><td><span class="method-tag" style="background:${getMethodColor(log.method)}">${log.method}</span></td><td><span class="status-tag ${log.status>=400?'error':''}">${log.status||'-'}</span></td><td title="${log.url}">${log.url}</td><td>${log.duration}ms</td>`;
@@ -965,7 +1039,20 @@
             if (currentTab === 'logs') refreshDisplay();
             else if (currentTab === 'network') refreshNetworkDisplay();
             else if (currentTab === 'socket') refreshSocketDisplay();
+            
+            // 移动端点击后自动收起侧边栏
+            if (window.innerWidth <= 768) {
+                toggleMobileSidebar();
+            }
         }
+
+        function toggleMobileSidebar() {
+            const sidebar = document.querySelector('.sidebar');
+            const overlay = document.getElementById('sidebar-overlay');
+            sidebar.classList.toggle('show');
+            overlay.classList.toggle('show');
+        }
+
         function copyText(t, e) { e.stopPropagation(); navigator.clipboard.writeText(t).then(() => alert('已复制')); }
         function toggleSort() { sortDesc = !sortDesc; document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑"; refreshDisplay(); if(currentTab==='socket') refreshSocketDisplay(); }
         function clearLogs() { 
