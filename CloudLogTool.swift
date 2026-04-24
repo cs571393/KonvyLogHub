@@ -17,9 +17,9 @@ final class CloudLogTool: NSObject, @unchecked Sendable {
     
     /// 查看log的地址： https://konvyloghub.pages.dev
     
-    /// 部署后的 Cloudflare Worker 地址
-    private let workerUrl = "https://konvyloghub.pages.dev/report"
-    private let authToken = "konvy-debug-2026"
+    /// 部署后的 Supabase 直连地址 (绕过 Cloudflare TLS 错误)
+    private let supabaseUrl = "https://pznzmvoxewzbpwnwuftw.supabase.co"
+    private let supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6bnptdm94ZXd6YnB3bnd1ZnR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMDc5MzgsImV4cCI6MjA5MjU4MzkzOH0.JH7C6ciELMDlh1rchzAUlzO5mNoTb-NBW-CUnTAWBGA"
     
     // --- 内部网络会话 (用于跳过 TLS 校验) ---
     private lazy var session: URLSession = {
