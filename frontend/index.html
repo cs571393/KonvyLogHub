@@ -468,7 +468,12 @@
                 }
             };
 
-            tr.innerHTML = `<td>${log.timeStr}</td><td><span class="method-tag" style="background:${getMethodColor(log.method)}">${log.method}</span></td><td><span class="status-tag ${log.status>=400?'error':''}">${log.status||'-'}</span></td><td title="${log.url}">${log.url}</td><td>${log.duration}ms</td>`;
+            const safeUrl = escapeHtml(log.url);
+            const safeMethod = escapeHtml(log.method);
+            const safeTime = escapeHtml(log.timeStr);
+            const safeStatus = escapeHtml(log.status || '-');
+            const safeDuration = escapeHtml(log.duration);
+            tr.innerHTML = `<td>${safeTime}</td><td><span class="method-tag" style="background:${getMethodColor(log.method)}">${safeMethod}</span></td><td><span class="status-tag ${log.status>=400?'error':''}">${safeStatus}</span></td><td title="${safeUrl}">${safeUrl}</td><td>${safeDuration}ms</td>`;
             const trDetail = document.createElement('tr');
             trDetail.className = 'network-details-row';
             trDetail.innerHTML = `<td colspan="5" style="padding: 0; border: none; white-space: normal;"><div class="network-details">
@@ -587,7 +592,7 @@
             });
 
             let html = `<table class="compare-table" id="compare-table-el"><thead><tr><th>Key</th>`;
-            logs.forEach(l => html += `<th>${l.method} ${l.timeStr}</th>`);
+            logs.forEach(l => html += `<th>${escapeHtml(l.method)} ${escapeHtml(l.timeStr)}</th>`);
             html += `</tr></thead><tbody>`;
 
             sortedKeys.forEach(key => {
@@ -596,11 +601,11 @@
                 const displayKey = key.startsWith('_Info.') ? key.replace('_Info.', '') : key;
                 
                 html += `<tr class="${isSame ? 'same-row' : 'diff-row'}">
-                    <th style="${key.startsWith('_Info.') ? 'color: var(--accent-color); font-weight:bold;' : ''}">${displayKey}</th>`;
+                    <th style="${key.startsWith('_Info.') ? 'color: var(--accent-color); font-weight:bold;' : ''}">${escapeHtml(displayKey)}</th>`;
                 
                 values.forEach((v, i) => {
                     const displayVal = (v === undefined) ? '<span style="color:#666">N/A</span>' : 
-                                      (typeof v === 'string' ? v : JSON.stringify(v));
+                                      escapeHtml(typeof v === 'string' ? v : JSON.stringify(v));
                     const isDiff = !isSame && JSON.stringify(v) !== JSON.stringify(values[0]) && i > 0;
                     html += `<td><span class="${isDiff ? 'diff-tag' : ''}">${displayVal}</span></td>`;
                 });
@@ -628,7 +633,7 @@
             const levelColor = colors[log.level] || colors.info;
             div.style.borderLeftColor = levelColor;
             const content = typeof log.content === 'object' ? JSON.stringify(log.content, null, 2) : String(log.content);
-            div.innerHTML = `<div class="log-info-meta"><span class="time">${log.timeStr}</span><span class="tag" style="background:${levelColor}">${log.level}</span><span class="device-name-tag">[${log.name}]</span></div><div class="log-content">${content}</div>`;
+            div.innerHTML = `<div class="log-info-meta"><span class="time">${escapeHtml(log.timeStr)}</span><span class="tag" style="background:${levelColor}">${escapeHtml(log.level)}</span><span class="device-name-tag">[${escapeHtml(log.name)}]</span></div><div class="log-content">${escapeHtml(content)}</div>`;
             return div;
         }
 
@@ -651,12 +656,12 @@
             const isObject = log.content && typeof log.content === 'object';
             const contentHtml = isObject 
                 ? formatJsonView(log.content) 
-                : `<span class="json-string">${log.content}</span>`;
+                : `<span class="json-string">${escapeHtml(log.content)}</span>`;
 
             div.innerHTML = `<div class="log-info-meta">
-                <span class="time">${log.timeStr}</span>
-                <span class="tag" style="background:${color}">${log.action}</span>
-                <span class="device-name-tag">[${log.name}]</span>
+                <span class="time">${escapeHtml(log.timeStr)}</span>
+                <span class="tag" style="background:${color}">${escapeHtml(log.action)}</span>
+                <span class="device-name-tag">[${escapeHtml(log.name)}]</span>
                 <span class="copy-btn" id="copy-socket-btn">[复制]</span>
                 ${isObject ? `
                     <span class="copy-btn" style="color: #858585" id="expand-socket-btn">[展开]</span>
@@ -812,8 +817,8 @@
             const raw = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
             return `<div class="detail-section">
                 <div class="detail-header">
-                    <div class="detail-title">${title}</div>
-                    <span class="copy-btn" onclick="copyRaw(this, ${JSON.stringify(raw).replace(/"/g, '&quot;')})">[复制]</span>
+                    <div class="detail-title">${escapeHtml(title)}</div>
+                    <span class="copy-btn" onclick="copyRaw(this, decodeURIComponent('${encodeInlineArg(raw)}'))">[复制]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, true)">[全部展开]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, false)">[全部收起]</span>
                     <div class="json-search-container">
@@ -904,28 +909,29 @@
 
         function formatJsonView(data) {
             let obj = data;
-            if (typeof data === 'string') { try { obj = JSON.parse(data); } catch(e) { return `<span class="json-string">${data}</span>`; } }
+            if (typeof data === 'string') { try { obj = JSON.parse(data); } catch(e) { return `<span class="json-string">${escapeHtml(data)}</span>`; } }
             return `<div class="json-tree">${createJsonTreeNode(obj, true, "root")}</div>`;
         }
 
         function createJsonTreeNode(data, isRoot = false, path = "") {
-            if (data === null) return `<span class="json-null" data-path="${path}">null</span>`;
+            const safePath = escapeHtml(path);
+            if (data === null) return `<span class="json-null" data-path="${safePath}">null</span>`;
             const type = typeof data;
             if (type !== 'object') {
-                const val = type === 'string' ? `"${data}"` : data;
-                return `<span class="json-${type}" data-path="${path}">${val}</span>`;
+                const val = type === 'string' ? JSON.stringify(data) : String(data);
+                return `<span class="json-${type}" data-path="${safePath}">${escapeHtml(val)}</span>`;
             }
             const isArray = Array.isArray(data);
             const keys = Object.keys(data);
             if (keys.length === 0) return isArray ? '[]' : '{}';
             let html = `<details class="json-item" ${isRoot?'open':''}>`;
-            html += `<summary class="json-summary" data-path="${path}">${isArray?'Array':'Object'}<span class="json-size">${keys.length} items</span></summary>`;
+            html += `<summary class="json-summary" data-path="${safePath}">${isArray?'Array':'Object'}<span class="json-size">${keys.length} items</span></summary>`;
             html += `<div class="json-content">`;
             keys.forEach((key, index) => {
                 const subPath = isArray ? `${path}[${index}]` : (path ? `${path}.${key}` : key);
-                html += `<div class="json-row" data-path="${subPath}">`;
+                html += `<div class="json-row" data-path="${escapeHtml(subPath)}">`;
                 if (isArray) html += `<span class="json-key" style="opacity: 0.6">[${index}]:</span>`;
-                else html += `<span class="json-key">"${key}":</span>`;
+                else html += `<span class="json-key">${escapeHtml(JSON.stringify(key))}:</span>`;
                 html += createJsonTreeNode(data[key], false, subPath);
                 html += `</div>`;
             });
@@ -935,6 +941,18 @@
 
         function toggleAllJson(btn, isOpen) { btn.closest('.detail-section').querySelectorAll('details').forEach(d => d.open = isOpen); }
         function copyRaw(btn, text) { navigator.clipboard.writeText(text).then(() => { const old = btn.innerText; btn.innerText = '[已复制!]'; btn.style.color = '#4caf50'; setTimeout(() => { btn.innerText = old; btn.style.color = 'var(--accent-color)'; }, 1000); }); }
+        function escapeHtml(value) {
+            return String(value ?? '').replace(/[&<>"']/g, ch => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            })[ch]);
+        }
+        function encodeInlineArg(value) {
+            return encodeURIComponent(String(value ?? ''));
+        }
         function getMethodColor(m) { return {GET:'var(--method-get)',POST:'var(--method-post)',PUT:'var(--method-put)',DELETE:'var(--method-delete)'}[m] || '#858585'; }
         function formatTime(ms) { const d = new Date(ms); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`; }
         function saveToLocal() { localStorage.setItem('konvy_devices', JSON.stringify(Array.from(devices.entries()))); }
@@ -975,25 +993,32 @@
                 const meta = data.metadata || {};
                 const fields = [{k:'UID',v:meta.user_id},{k:'User',v:meta.username},{k:'Version',v:meta.appVersion},{k:'OS',v:meta.osVersion},{k:'IMEI',v:meta.imei},{k:'FCM',v:meta.fcm_token},{k:'Copy',v:meta.copyText}];
                 const displayName = meta.username ? `${data.name} (${meta.username})` : data.name;
+                const safeId = escapeHtml(id);
+                const deviceArg = encodeInlineArg(id);
                 const group = document.createElement('div');
                 group.className = `device-group ${currentDeviceId===id?'expanded':''}`;
                 let detailsHtml = '<div class="device-details">';
-                fields.forEach(f => { if(f.v) detailsHtml += `<div class="info-row"><div class="info-key">${f.k}:</div><div class="info-val" title="${f.v}">${f.v}</div><span class="copy-btn" onclick="copyText('${f.v}', event)">[复制]</span></div>`; });
+                fields.forEach(f => {
+                    if(f.v) {
+                        const safeValue = escapeHtml(f.v);
+                        detailsHtml += `<div class="info-row"><div class="info-key">${escapeHtml(f.k)}:</div><div class="info-val" title="${safeValue}">${safeValue}</div><span class="copy-btn" onclick="copyText(decodeURIComponent('${encodeInlineArg(f.v)}'), event)">[复制]</span></div>`;
+                    }
+                });
                 detailsHtml += '</div>';
                 
                 detailsHtml += `
                     <div class="command-zone">
-                        <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${id}">
-                        <button class="command-btn" onclick="sendToClipboard('${id}', event)">发送到设备剪贴板</button>
+                        <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${safeId}">
+                        <button class="command-btn" onclick="sendToClipboard(decodeURIComponent('${deviceArg}'), event)">发送到设备剪贴板</button>
                         <div class="clear-device-actions">
-                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'logs', event)">清日志</button>
-                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'network', event)">清网络</button>
-                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'socket', event)">清Socket</button>
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs(decodeURIComponent('${deviceArg}'), 'logs', event)">清日志</button>
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs(decodeURIComponent('${deviceArg}'), 'network', event)">清网络</button>
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs(decodeURIComponent('${deviceArg}'), 'socket', event)">清Socket</button>
                         </div>
                     </div>
                 `;
 
-                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice('${id}')"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${displayName}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div><div class="device-details">${detailsHtml}</div>`;
+                group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice(decodeURIComponent('${deviceArg}'))"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${escapeHtml(displayName)}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div><div class="device-details">${detailsHtml}</div>`;
                 list.appendChild(group);
             });
         }
