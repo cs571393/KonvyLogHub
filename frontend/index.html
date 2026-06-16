@@ -46,6 +46,9 @@
         .command-input { width: 100%; background: #111; border: 1px solid #444; color: #d4d4d4; padding: 5px; font-size: 11px; border-radius: 3px; box-sizing: border-box; margin-bottom: 5px; }
         .command-btn { width: 100%; background: var(--accent-color); color: white; border: none; padding: 5px; border-radius: 3px; cursor: pointer; font-size: 11px; }
         .command-btn:hover { background: #005a9e; }
+        .clear-device-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 6px; }
+        .clear-device-btn { background: #8a3a3a; padding: 5px 2px; }
+        .clear-device-btn:hover { background: #a33; }
         
         .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
         .tabs { display: flex; background: #2d2d2d; border-bottom: 1px solid var(--border-color); flex-shrink: 0; }
@@ -319,6 +322,7 @@
         let currentTab = 'logs';
         const observedLevels = new Set();
         let devices = new Map();
+        const visibleDeviceIds = new Set();
         const searchState = new Map(); 
         let selectedNetworkLogs = new Set();
 
@@ -343,6 +347,7 @@
         function processItem(log) {
             const dId = log.deviceId || log.device_id || 'unknown';
             const dName = log.deviceName || log.device_name || 'Unknown Device';
+            visibleDeviceIds.add(dId);
             if (!devices.has(dId) || log.metadata) {
                 devices.set(dId, { name: dName, metadata: log.metadata || (devices.get(dId)||{}).metadata || {} });
                 localStorage.setItem('konvy_devices', JSON.stringify(Array.from(devices.entries())));
@@ -943,7 +948,6 @@
             const list = document.getElementById('device-list');
             list.innerHTML = '';
             
-            // 获取当前有数据的设备 ID 集合
             const activeIds = new Set([
                 ...allLogs.map(l => l.id),
                 ...networkLogs.map(l => l.id),
@@ -952,7 +956,7 @@
 
             let visibleDevices = [];
             devices.forEach((data, id) => {
-                if (activeIds.has(id)) {
+                if (visibleDeviceIds.has(id) || activeIds.has(id)) {
                     visibleDevices.push({ id, ...data });
                 }
             });
@@ -981,6 +985,11 @@
                     <div class="command-zone">
                         <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${id}">
                         <button class="command-btn" onclick="sendToClipboard('${id}', event)">发送到设备剪贴板</button>
+                        <div class="clear-device-actions">
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'logs', event)">清日志</button>
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'network', event)">清网络</button>
+                            <button class="command-btn clear-device-btn" onclick="clearDeviceLogs('${id}', 'socket', event)">清Socket</button>
+                        </div>
                     </div>
                 `;
 
@@ -1055,12 +1064,33 @@
 
         function copyText(t, e) { e.stopPropagation(); navigator.clipboard.writeText(t).then(() => alert('已复制')); }
         function toggleSort() { sortDesc = !sortDesc; document.getElementById('sortBtn').innerText = sortDesc ? "排序: 最新优先 ↓" : "排序: 最旧优先 ↑"; refreshDisplay(); if(currentTab==='socket') refreshSocketDisplay(); }
+        function clearDeviceLogs(deviceId, scope, event) {
+            if (event) event.stopPropagation();
+            if (scope === 'logs') {
+                allLogs = allLogs.filter(l => l.id !== deviceId);
+            } else if (scope === 'network') {
+                const removedNetworkLogIds = new Set(networkLogs.filter(l => l.id === deviceId).map(l => l.logId));
+                networkLogs = networkLogs.filter(l => l.id !== deviceId);
+                selectedNetworkLogs.forEach(logId => {
+                    if (removedNetworkLogIds.has(logId)) selectedNetworkLogs.delete(logId);
+                });
+            } else if (scope === 'socket') {
+                socketLogs = socketLogs.filter(l => l.id !== deviceId);
+                allLogs = allLogs.filter(l => !(l.id === deviceId && l.level === 'socket'));
+            }
+
+            updateCompareBar();
+            updateDeviceList();
+            currentTab==='logs'?refreshDisplay():(currentTab==='network'?refreshNetworkDisplay():refreshSocketDisplay());
+        }
         function clearLogs() { 
             allLogs=[]; networkLogs=[]; socketLogs=[]; 
+            selectedNetworkLogs.clear();
+            updateCompareBar();
             updateDeviceList(); // 清空后重新计算可见设备
             currentTab==='logs'?refreshDisplay():(currentTab==='network'?refreshNetworkDisplay():refreshSocketDisplay()); 
         }
-        function resetDevices() { if(confirm("确定重置？")) { localStorage.removeItem('konvy_devices'); devices=new Map(); updateDeviceList(); } }
+        function resetDevices() { if(confirm("确定重置？")) { localStorage.removeItem('konvy_devices'); devices=new Map(); visibleDeviceIds.clear(); updateDeviceList(); } }
         document.getElementById('searchInput').oninput = () => refreshDisplay();
         document.getElementById('networkSearchInput').oninput = () => refreshNetworkDisplay();
     </script>
