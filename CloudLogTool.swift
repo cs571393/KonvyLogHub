@@ -18,8 +18,8 @@ final class CloudLogTool: NSObject, @unchecked Sendable {
     /// 查看log的地址： https://konvyloghub.pages.dev
     
     /// 部署后的 Supabase 直连地址 (绕过 Cloudflare TLS 错误)
-    private let supabaseUrl = "https://pznzmvoxewzbpwnwuftw.supabase.co"
-    private let supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB6bnptdm94ZXd6YnB3bnd1ZnR3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcwMDc5MzgsImV4cCI6MjA5MjU4MzkzOH0.JH7C6ciELMDlh1rchzAUlzO5mNoTb-NBW-CUnTAWBGA"
+    private let supabaseUrl = "https://fstsmttrtozpvhfckxzs.supabase.co"
+    private let supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZzdHNtdHRydG96cHZoZmNreHpzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODMwMjQ3MzQsImV4cCI6MjA5ODYwMDczNH0.CsVmsyFQdnQ4Vkm5mYuAGfxo1LH9DfNVGblpkuY4Zq8"
     
     // --- 内部网络会话 (用于跳过 TLS 校验) ---
     private lazy var session: URLSession = {
