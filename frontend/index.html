@@ -476,12 +476,25 @@
             tr.innerHTML = `<td>${safeTime}</td><td><span class="method-tag" style="background:${getMethodColor(log.method)}">${safeMethod}</span></td><td><span class="status-tag ${log.status>=400?'error':''}">${safeStatus}</span></td><td title="${safeUrl}">${safeUrl}</td><td>${safeDuration}ms</td>`;
             const trDetail = document.createElement('tr');
             trDetail.className = 'network-details-row';
+            const detailSections = [
+                ['Request Headers', log.reqHeaders],
+                ['Request Body', log.reqBody],
+                ['Response Headers', log.resHeaders],
+                ['Response Body', log.resBody]
+            ].filter(([, data]) => data && !(typeof data === 'object' && Object.keys(data).length === 0));
             trDetail.innerHTML = `<td colspan="5" style="padding: 0; border: none; white-space: normal;"><div class="network-details">
-                ${renderDetailSection('Request Headers', log.reqHeaders)}
-                ${renderDetailSection('Request Body', log.reqBody)}
-                ${renderDetailSection('Response Headers', log.resHeaders)}
-                ${renderDetailSection('Response Body', log.resBody)}
+                ${detailSections.map(([title, data]) => renderDetailSection(title, data)).join('')}
             </div></td>`;
+
+            // 原始内容保留在事件闭包中，避免将大文本或引号拼进内联 JavaScript。
+            trDetail.querySelectorAll('.copy-raw-btn').forEach((btn, index) => {
+                const data = detailSections[index][1];
+                const raw = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+                btn.addEventListener('click', event => {
+                    event.stopPropagation();
+                    copyRaw(btn, raw);
+                });
+            });
             return { tr, trDetail };
         }
 
@@ -814,11 +827,10 @@
 
         function renderDetailSection(title, data) {
             if (!data || (typeof data === 'object' && Object.keys(data).length === 0)) return '';
-            const raw = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
             return `<div class="detail-section">
                 <div class="detail-header">
                     <div class="detail-title">${escapeHtml(title)}</div>
-                    <span class="copy-btn" onclick="copyRaw(this, decodeURIComponent('${encodeInlineArg(raw)}'))">[复制]</span>
+                    <span class="copy-btn copy-raw-btn">[复制]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, true)">[全部展开]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, false)">[全部收起]</span>
                     <div class="json-search-container">
@@ -940,7 +952,49 @@
         }
 
         function toggleAllJson(btn, isOpen) { btn.closest('.detail-section').querySelectorAll('details').forEach(d => d.open = isOpen); }
-        function copyRaw(btn, text) { navigator.clipboard.writeText(text).then(() => { const old = btn.innerText; btn.innerText = '[已复制!]'; btn.style.color = '#4caf50'; setTimeout(() => { btn.innerText = old; btn.style.color = 'var(--accent-color)'; }, 1000); }); }
+        async function writeClipboardText(text) {
+            if (navigator.clipboard?.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    return;
+                } catch (error) {
+                    console.warn('Clipboard API failed, trying fallback:', error);
+                }
+            }
+
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            textarea.setAttribute('readonly', '');
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            textarea.setSelectionRange(0, textarea.value.length);
+            const copied = document.execCommand('copy');
+            textarea.remove();
+            if (!copied) throw new Error('浏览器拒绝了剪贴板访问');
+        }
+
+        async function copyRaw(btn, text) {
+            const oldText = btn.innerText;
+            const oldColor = btn.style.color;
+            const oldTitle = btn.title;
+            try {
+                await writeClipboardText(String(text ?? ''));
+                btn.innerText = '[已复制!]';
+                btn.style.color = '#4caf50';
+            } catch (error) {
+                console.error('Copy failed:', error);
+                btn.innerText = '[复制失败]';
+                btn.style.color = 'var(--status-error)';
+                btn.title = error?.message || '复制失败';
+            }
+            setTimeout(() => {
+                btn.innerText = oldText;
+                btn.style.color = oldColor || 'var(--accent-color)';
+                btn.title = oldTitle;
+            }, 1500);
+        }
         function escapeHtml(value) {
             return String(value ?? '').replace(/[&<>"']/g, ch => ({
                 '&': '&amp;',
@@ -951,7 +1005,8 @@
             })[ch]);
         }
         function encodeInlineArg(value) {
-            return encodeURIComponent(String(value ?? ''));
+            // encodeURIComponent 不会编码单引号；内联处理器使用单引号包裹参数时必须额外处理。
+            return encodeURIComponent(String(value ?? '')).replace(/'/g, '%27');
         }
         function getMethodColor(m) { return {GET:'var(--method-get)',POST:'var(--method-post)',PUT:'var(--method-put)',DELETE:'var(--method-delete)'}[m] || '#858585'; }
         function formatTime(ms) { const d = new Date(ms); return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}.${String(d.getMilliseconds()).padStart(3,'0')}`; }
