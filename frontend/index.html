@@ -123,7 +123,9 @@
         .json-summary::-webkit-details-marker { display: none; }
         .json-summary::before { content: '▶'; display: inline-block; width: 14px; font-size: 7px; transition: transform 0.1s; margin-right: 2px; text-align: center; }
         details[open] > .json-summary::before { transform: rotate(90deg); }
-        .json-key { color: #9cdcfe; margin-right: 4px; cursor: crosshair; }
+        .json-key { color: #9cdcfe; margin-right: 4px; cursor: pointer; }
+        .json-tree .json-key:hover, .json-tree .json-string:hover, .json-tree .json-number:hover, .json-tree .json-boolean:hover, .json-tree .json-null:hover { text-decoration: underline; }
+        .path-copied { color: #4caf50 !important; font-weight: bold; }
         .json-string { color: #ce9178; }
         .json-number { color: #b5cea8; }
         .json-boolean, .json-null { color: #569cd6; }
@@ -302,6 +304,7 @@
                         <button class="nav-btn" onclick="navSocketSearch(1)">▶</button>
                         <span id="socket-search-count" style="font-size:10px; color:#666; margin-left: 5px;">0/0</span>
                     </div>
+                    <span style="font-size:10px; color:#6a9955;">💡 双击键名=复制路径 · 双击值=复制值</span>
                     <div style="flex:1"></div>
                     <span style="font-size:11px; color: #858585" id="socket-count">0 messages</span>
                 </div>
@@ -325,6 +328,7 @@
         const visibleDeviceIds = new Set();
         const searchState = new Map(); 
         let selectedNetworkLogs = new Set();
+        let lastDeviceListSig = null;
 
         try {
             const saved = localStorage.getItem('konvy_devices');
@@ -830,6 +834,7 @@
             return `<div class="detail-section">
                 <div class="detail-header">
                     <div class="detail-title">${escapeHtml(title)}</div>
+                    <span style="font-size:10px; color:#6a9955;">💡 双击键名=复制路径 · 双击值=复制值</span>
                     <span class="copy-btn copy-raw-btn">[复制]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, true)">[全部展开]</span>
                     <span class="copy-btn" style="color: #858585" onclick="toggleAllJson(this, false)">[全部收起]</span>
@@ -854,6 +859,54 @@
                 const breadcrumb = row.closest('.detail-section').querySelector('.json-breadcrumb span');
                 breadcrumb.innerText = path;
             }
+        }
+
+        // 双击键名复制路径，双击值复制值本身；字符串原文由 textContent 反解析得到
+        document.addEventListener('dblclick', (e) => {
+            const keyEl = e.target.closest('.json-tree .json-key');
+            const valEl = keyEl ? null : e.target.closest('.json-tree .json-string, .json-tree .json-number, .json-tree .json-boolean, .json-tree .json-null');
+            if (!keyEl && !valEl) return;
+            const holder = (keyEl || valEl).closest('[data-path]');
+            const path = holder ? holder.getAttribute('data-path') : '';
+            if (!path) return;
+            e.stopPropagation();
+            // 双击会选中文字，复制后清掉选区，避免误以为复制的是选区内容
+            window.getSelection().removeAllRanges();
+            if (keyEl) {
+                copyJsonElement(keyEl, path, false);
+            } else {
+                let value = valEl.textContent;
+                try {
+                    const parsed = JSON.parse(value);
+                    if (typeof parsed !== 'object' || parsed === null) value = String(parsed);
+                } catch (err) { /* 反解析失败就按显示文本复制 */ }
+                copyJsonElement(valEl, value, true);
+            }
+        });
+
+        function copyJsonElement(el, text, isValue) {
+            writeClipboardText(text).then(() => {
+                el.classList.add('path-copied');
+                setTimeout(() => el.classList.remove('path-copied'), 800);
+                const section = el.closest('.detail-section');
+                const bcSpan = section ? section.querySelector('.json-breadcrumb span') : null;
+                if (bcSpan) {
+                    const prev = bcSpan.innerText;
+                    const preview = text.length > 60 ? text.slice(0, 60) + '…' : text;
+                    bcSpan.innerText = (isValue ? '✔ 已复制值: ' : '✔ 已复制路径: ') + preview;
+                    bcSpan.style.color = '#4caf50';
+                    setTimeout(() => {
+                        if (bcSpan.innerText.indexOf('✔') === 0) {
+                            bcSpan.innerText = prev;
+                            bcSpan.style.color = '';
+                        }
+                    }, 1200);
+                }
+            }).catch(err => {
+                console.error('复制失败:', err);
+                el.style.color = '#f48771';
+                setTimeout(() => { el.style.color = ''; }, 800);
+            });
         }
 
         function copyPath(el) {
@@ -927,11 +980,11 @@
 
         function createJsonTreeNode(data, isRoot = false, path = "") {
             const safePath = escapeHtml(path);
-            if (data === null) return `<span class="json-null" data-path="${safePath}">null</span>`;
+            if (data === null) return `<span class="json-null" data-path="${safePath}" title="双击复制值">null</span>`;
             const type = typeof data;
             if (type !== 'object') {
                 const val = type === 'string' ? JSON.stringify(data) : String(data);
-                return `<span class="json-${type}" data-path="${safePath}">${escapeHtml(val)}</span>`;
+                return `<span class="json-${type}" data-path="${safePath}" title="双击复制值">${escapeHtml(val)}</span>`;
             }
             const isArray = Array.isArray(data);
             const keys = Object.keys(data);
@@ -942,8 +995,8 @@
             keys.forEach((key, index) => {
                 const subPath = isArray ? `${path}[${index}]` : (path ? `${path}.${key}` : key);
                 html += `<div class="json-row" data-path="${escapeHtml(subPath)}">`;
-                if (isArray) html += `<span class="json-key" style="opacity: 0.6">[${index}]:</span>`;
-                else html += `<span class="json-key">${escapeHtml(JSON.stringify(key))}:</span>`;
+                if (isArray) html += `<span class="json-key" style="opacity: 0.6" title="双击复制路径">[${index}]:</span>`;
+                else html += `<span class="json-key" title="双击复制路径">${escapeHtml(JSON.stringify(key))}:</span>`;
                 html += createJsonTreeNode(data[key], false, subPath);
                 html += `</div>`;
             });
@@ -1019,8 +1072,7 @@
         }
         function updateDeviceList() {
             const list = document.getElementById('device-list');
-            list.innerHTML = '';
-            
+
             const activeIds = new Set([
                 ...allLogs.map(l => l.id),
                 ...networkLogs.map(l => l.id),
@@ -1043,6 +1095,25 @@
                 }
             }
 
+            // 设备与选中状态都没变化时直接跳过，避免每条新日志都重建 DOM
+            const sig = JSON.stringify([currentDeviceId, visibleDevices]);
+            if (sig === lastDeviceListSig) return;
+            lastDeviceListSig = sig;
+
+            // 重建前保存还没发送的下发文本与输入焦点，重建后恢复，避免粘贴的内容被清掉
+            const pendingInputs = {};
+            let activeInputDevice = null;
+            list.querySelectorAll('.command-input').forEach(inp => {
+                const devId = decodeURIComponent(inp.dataset.deviceId || '');
+                if (inp.value) pendingInputs[devId] = inp.value;
+            });
+            const activeEl = document.activeElement;
+            if (activeEl && activeEl.classList && activeEl.classList.contains('command-input')) {
+                activeInputDevice = decodeURIComponent(activeEl.dataset.deviceId || '');
+            }
+
+            list.innerHTML = '';
+
             visibleDevices.forEach((data) => {
                 const id = data.id;
                 const meta = data.metadata || {};
@@ -1063,7 +1134,7 @@
                 
                 detailsHtml += `
                     <div class="command-zone">
-                        <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${safeId}">
+                        <input type="text" class="command-input" placeholder="输入要下发复制的文本..." id="cmd-${safeId}" data-device-id="${deviceArg}">
                         <button class="command-btn" onclick="sendToClipboard(decodeURIComponent('${deviceArg}'), event)">发送到设备剪贴板</button>
                         <div class="clear-device-actions">
                             <button class="command-btn clear-device-btn" onclick="clearDeviceLogs(decodeURIComponent('${deviceArg}'), 'logs', event)">清日志</button>
@@ -1075,6 +1146,17 @@
 
                 group.innerHTML = `<div class="device-item ${currentDeviceId===id?'active' :''}" onclick="selectDevice(decodeURIComponent('${deviceArg}'))"><div style="display:flex; align-items:center"><div style="width:8px;height:8px;background:#2196f3;border-radius:50%;margin-right:10px"></div><span>${escapeHtml(displayName)}</span></div><svg class="chevron" viewBox="0 0 24 24" width="12" height="12"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z" fill="#858585"/></svg></div><div class="device-details">${detailsHtml}</div>`;
                 list.appendChild(group);
+
+                const inputEl = group.querySelector('.command-input');
+                if (inputEl) {
+                    const devId = decodeURIComponent(inputEl.dataset.deviceId || '');
+                    if (pendingInputs[devId]) inputEl.value = pendingInputs[devId];
+                    if (activeInputDevice === devId) {
+                        inputEl.focus();
+                        const len = inputEl.value.length;
+                        inputEl.setSelectionRange(len, len);
+                    }
+                }
             });
         }
 
